@@ -1,0 +1,4 @@
+.venv
+model_data
+feature_engineering.log
+data
