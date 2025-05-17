@@ -3137,7 +3137,7 @@ class TeamsFeatures:
     
     def plot_feature_importance(self, model, X, y, feature_names=None, top_n=20):
         """
-        Grafica la importancia de las características para un modelo
+        Grafica la importancia de las características para un modelo y genera JSON con correlaciones
         
         Args:
             model: Modelo entrenado (debe tener atributo feature_importances_)
@@ -3145,10 +3145,13 @@ class TeamsFeatures:
             y (np.array): Variable objetivo
             feature_names (list): Lista de nombres de características
             top_n (int): Número de características principales a mostrar
+            
+        Returns:
+            pd.DataFrame: DataFrame con importancia de características
         """
         if not hasattr(model, 'feature_importances_'):
             logger.error("El modelo no tiene atributo feature_importances_")
-            return
+            return None
             
         # Obtener importancia de características
         importances = model.feature_importances_
@@ -3165,11 +3168,52 @@ class TeamsFeatures:
             'Importance': importances
         }).sort_values('Importance', ascending=False)
         
-        # Mostrar las top_n características
+        # Generar gráfico
         plt.figure(figsize=(12, 8))
         sns.barplot(x='Importance', y='Feature', data=importance_df.head(top_n))
         plt.title(f'Top {top_n} Características por Importancia')
         plt.tight_layout()
+        
+        # Guardar gráfico como imagen
+        plot_path = f"feature_importance_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png"
+        plt.savefig(plot_path, dpi=300, bbox_inches='tight')
+        plt.close()
+        logger.info(f"Gráfico de importancia guardado en {plot_path}")
+        
+        # Calcular y guardar correlaciones
+        try:
+            # Seleccionar top_n características por importancia
+            top_features = importance_df.head(top_n)['Feature'].tolist()
+            
+            # Obtener datos correspondientes a las características más importantes
+            if hasattr(X, 'loc'):
+                # Para DataFrames de pandas
+                top_X = X.loc[:, top_features]
+            else:
+                # Para arrays de numpy
+                top_indices = [list(feature_names).index(feat) for feat in top_features if feat in feature_names]
+                top_X = X[:, top_indices]
+                top_X = pd.DataFrame(top_X, columns=[feature_names[i] for i in top_indices])
+            
+            # Calcular matriz de correlación
+            corr_matrix = top_X.corr().round(3).fillna(0)
+            
+            # Convertir a diccionario para JSON
+            corr_dict = {
+                'features': top_features,
+                'correlations': corr_matrix.to_dict()
+            }
+            
+            # Guardar como JSON
+            import json
+            json_path = f"feature_correlations_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+            with open(json_path, 'w') as f:
+                json.dump(corr_dict, f, indent=4)
+            
+            logger.info(f"Correlaciones guardadas en {json_path}")
+        except Exception as e:
+            logger.error(f"Error al calcular y guardar correlaciones: {str(e)}")
+            logger.error(traceback.format_exc())
         
         return importance_df
 

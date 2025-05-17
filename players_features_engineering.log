@@ -1,0 +1,41 @@
+2025-05-17 03:55:01,462 - PlayerFeatureEngineering - INFO - Iniciando proceso de ingeniería de características para jugadores
+2025-05-17 03:55:02,184 - PlayersFeatures - INFO - Inicializado sistema de características con 55392 registros y ventanas [3, 5, 10, 20]
+2025-05-17 03:55:02,186 - PlayerFeatureEngineering - INFO - Generando características para 55392 registros
+2025-05-17 03:55:02,186 - PlayersFeatures - INFO - Iniciando proceso de generación de características para jugadores
+2025-05-17 03:55:02,186 - PlayersFeatures - INFO - Iniciando preprocesamiento de datos
+2025-05-17 03:55:02,187 - PlayersFeatures - INFO - Verificando duplicados por jugador y fecha
+2025-05-17 03:55:02,209 - PlayersFeatures - INFO - Creando características básicas
+2025-05-17 03:55:02,216 - PlayersFeatures - DEBUG - Características de double-double y triple-double creadas
+2025-05-17 03:55:02,216 - PlayersFeatures - INFO - Características básicas creadas
+2025-05-17 03:55:02,216 - PlayersFeatures - INFO - Preprocesamiento completado
+2025-05-17 03:55:02,217 - PlayersFeatures - INFO - Creando características de ventana móvil con ventanas: [3, 5, 10, 20]
+2025-05-17 03:55:02,217 - PlayersFeatures - DEBUG - Columnas base para características rolling: 19
+2025-05-17 03:57:52,481 - PlayersFeatures - INFO - Creadas nuevas características de ventana móvil
+2025-05-17 03:57:52,523 - PlayersFeatures - INFO - Creando características temporales avanzadas
+2025-05-17 03:57:52,642 - PlayersFeatures - INFO - Variables dummy de fase de temporada creadas correctamente
+2025-05-17 03:57:54,020 - PlayersFeatures - INFO - Variables dummy de categoría de descanso creadas correctamente
+2025-05-17 04:01:14,881 - PlayersFeatures - INFO - Variables dummy de densidad de calendario creadas correctamente
+2025-05-17 04:01:17,016 - PlayersFeatures - INFO - Variables dummy de progreso de temporada creadas correctamente
+2025-05-17 04:01:49,428 - PlayersFeatures - INFO - Variables dummy de minutes_trend_category creadas correctamente
+2025-05-17 04:01:49,477 - PlayersFeatures - INFO - Variables dummy de momentum_category creadas correctamente
+2025-05-17 04:01:49,526 - PlayersFeatures - INFO - Variables dummy de fatigue_category creadas correctamente
+2025-05-17 04:01:49,527 - PlayersFeatures - INFO - Características temporales creadas correctamente
+2025-05-17 04:01:49,589 - PlayersFeatures - INFO - Creando características físicas del jugador
+2025-05-17 04:01:49,590 - PlayersFeatures - INFO - Columnas físicas encontradas: ['Height_Inches', 'Weight', 'BMI']
+2025-05-17 04:01:49,651 - PlayersFeatures - INFO - Categorías de altura creadas correctamente
+2025-05-17 04:01:49,862 - PlayersFeatures - INFO - Categorías de peso creadas correctamente
+2025-05-17 04:01:50,063 - PlayersFeatures - INFO - Categorías de BMI creadas correctamente
+2025-05-17 04:01:50,246 - PlayersFeatures - INFO - Categorías de estructura física creadas correctamente
+2025-05-17 04:01:50,428 - PlayersFeatures - INFO - Variables dummy de posición creadas correctamente
+2025-05-17 04:01:50,447 - PlayersFeatures - INFO - Características físicas creadas correctamente
+2025-05-17 04:01:50,448 - PlayersFeatures - INFO - Creando características de posición y rol del jugador
+2025-05-17 04:01:50,496 - PlayersFeatures - INFO - Creación de características de posición y rol completada
+2025-05-17 04:01:50,497 - PlayersFeatures - INFO - Creando características específicas para predicción de puntos
+2025-05-17 04:03:36,970 - PlayersFeatures - INFO - Características específicas para predicción de puntos creadas correctamente
+2025-05-17 04:03:36,971 - PlayersFeatures - INFO - Creando características específicas para predicción de rebotes
+2025-05-17 04:04:29,071 - PlayersFeatures - INFO - Características de rebotes creadas correctamente
+2025-05-17 04:04:29,071 - PlayersFeatures - INFO - Creando características específicas para predicción de asistencias
+2025-05-17 04:05:27,212 - PlayersFeatures - INFO - Características de asistencias creadas correctamente
+2025-05-17 04:05:27,212 - PlayersFeatures - INFO - Creando características específicas para predicción de triples
+2025-05-17 04:07:17,174 - PlayersFeatures - INFO - Características específicas para predicción de triples creadas correctamente
+2025-05-17 04:07:17,174 - PlayersFeatures - INFO - Creando características para líneas de apuestas
