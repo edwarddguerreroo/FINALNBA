@@ -11,12 +11,13 @@ from src.preprocessing.data_loader import NBADataLoader
 import time
 
 # Configuración de logging
+# Establecer codificación UTF-8 para manejar correctamente caracteres especiales
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.FileHandler("data_loading.log", mode='w'),  # Sobrescribe el archivo en cada ejecución
-        logging.StreamHandler()
+        logging.FileHandler("data_loading.log", mode='w', encoding='utf-8'),  # Usar UTF-8 para el archivo
+        logging.StreamHandler()  # La salida de consola se maneja con encode/decode en los loggers
     ]
 )
 
@@ -24,6 +25,22 @@ logging.basicConfig(
 import warnings
 warnings.filterwarnings('ignore', category=FutureWarning)
 warnings.filterwarnings('ignore', category=pd.errors.PerformanceWarning)
+
+# Clase para manejar problemas de codificación en el logging de Windows
+class SafeLogFilter(logging.Filter):
+    def filter(self, record):
+        if isinstance(record.msg, str):
+            try:
+                # Intenta convertir cualquier mensaje con caracteres Unicode a ASCII
+                # reemplazando los caracteres problemáticos con '?'
+                record.msg = record.msg.encode('ascii', 'replace').decode('ascii')
+            except (UnicodeEncodeError, UnicodeDecodeError):
+                record.msg = "Mensaje con caracteres no ASCII (filtrado)"
+        return True
+
+# Aplicar el filtro al logger raíz
+root_logger = logging.getLogger()
+root_logger.addFilter(SafeLogFilter())
 
 logger = logging.getLogger('DataLoader')
 

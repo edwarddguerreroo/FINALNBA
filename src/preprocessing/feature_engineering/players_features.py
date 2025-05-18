@@ -23,10 +23,25 @@ logging.basicConfig(
     level=logging.DEBUG, 
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.FileHandler("players_features_engineering.log", mode='w'),  # Sobrescribe el archivo en cada ejecución
+        logging.FileHandler("players_features_engineering.log", mode='w', encoding='utf-8'),  # Usar UTF-8 para el archivo
         logging.StreamHandler()
     ]
 )
+
+# Clase para manejar problemas de codificación en el logging de Windows
+class SafeLogFilter(logging.Filter):
+    def filter(self, record):
+        if isinstance(record.msg, str):
+            try:
+                # Intenta sanitizar cualquier mensaje con caracteres Unicode problemáticos
+                record.msg = record.msg.encode('ascii', 'replace').decode('ascii')
+            except (UnicodeEncodeError, UnicodeDecodeError):
+                record.msg = "Mensaje con caracteres no ASCII (filtrado)"
+        return True
+
+# Aplicar el filtro al logger
+logger = logging.getLogger('PlayersFeatures')
+logger.addFilter(SafeLogFilter())
 
 # Reducir verbosidad de los warnings de pandas
 import warnings
@@ -105,55 +120,10 @@ class PlayersFeatures:
         # Ordenar datos por jugador y fecha
         self.players_data.sort_values(['Player', 'Date'], inplace=True)
         
-        # Crear características básicas derivadas
-        self._create_basic_features()
-        
         logger.info("Preprocesamiento completado")
         return self.players_data
     
-    def _create_basic_features(self):
-        """
-        Crea características básicas derivadas de las estadísticas existentes.
-        Double-double: 10+ en dos categorías principales (PTS, TRB, AST, STL, BLK)
-        Triple-double: 10+ en tres categorías principales
-        """
-        logger.info("Creando características básicas")
-        
-        # Definir las estadísticas principales para double/triple-double
-        main_stats = ['PTS', 'TRB', 'AST', 'STL', 'BLK']
-        available_main_stats = [stat for stat in main_stats if stat in self.players_data.columns]
-        
-        if len(available_main_stats) >= 2:
-            # Crear máscara para cada estadística >= 10
-            stats_masks = {}
-            for stat in available_main_stats:
-                stats_masks[stat] = (self.players_data[stat] >= 10)
-            
-            # Inicializar columnas
-            self.players_data['double_double'] = 0
-            self.players_data['triple_double'] = 0
-            
-            # Calcular el número total de categorías con 10 o más para cada fila
-            total_stats_over_10 = sum(stats_masks.values())
-            
-            # Verificar double-double: exactamente 2 o más estadísticas >= 10
-            double_double_mask = (total_stats_over_10 >= 2)
-            self.players_data.loc[double_double_mask, 'double_double'] = 1
-            
-            # Verificar triple-double: exactamente 3 o más estadísticas >= 10
-            triple_double_mask = (total_stats_over_10 >= 3)
-            self.players_data.loc[triple_double_mask, 'triple_double'] = 1
-            
-            # Crear columnas individuales para análisis
-            for stat in available_main_stats:
-                self.players_data[f'{stat}_double'] = stats_masks[stat].astype(int)
-            
-            logger.debug("Características de double-double y triple-double creadas")
-        else:
-            logger.warning("No hay suficientes estadísticas principales para calcular double-double")
-        
-        logger.info("Características básicas creadas")
-        
+    
     def _safe_rolling(self, series, window, operation='mean', min_periods=1):
         """
         Aplica una operación rolling de manera segura
@@ -237,30 +207,61 @@ class PlayersFeatures:
             # Crear características de posición y rol del jugador
             self._create_position_role_features()
             
-            # Crear características específicas para cada target
-            self._create_pts_prediction_features()  # Predicción de puntos
-            self._create_trb_prediction_features()  # Predicción de rebotes
-            self._create_ast_prediction_features()  # Predicción de asistencias
-            self._create_3p_prediction_features()   # Predicción de triples
+            # Crear características de titular vs suplente
+            self._create_starter_features()
+            
+            # Crear características específicas para predicción de puntos
+            self._create_pts_prediction_features()
+            
+            # Crear características específicas para predicción de rebotes
+            self._create_trb_prediction_features()
+            
+            # Crear características específicas para predicción de asistencias
+            self._create_ast_prediction_features()
+            
+            # Crear características específicas para predicción de triples
+            self._create_3p_prediction_features()
             
             # Crear características para líneas de apuestas
             self._create_betting_line_features()
             
-            # Crear características de doble-doble y triple-doble
+            # Crear características para doble-doble y triple-doble
             self._create_double_triple_features()
             
-            # Crear características de matchup específicas
+            # Crear características de matchup para jugadores
             self._create_matchup_features()
             
             # Crear características de eficiencia y productividad
             self._create_efficiency_features()
             
-            # Verificación y manejo de valores NaN
-            logger.info("Verificando y manejando valores NaN")
             
-            # Manejo de valores NaN
-            numeric_cols = self.players_data.select_dtypes(include=[np.number]).columns
-            self.players_data[numeric_cols] = self.players_data[numeric_cols].fillna(0)
+            # Verificar y corregir valores de porcentajes
+            percentage_cols = ['FG%', '2P%', '3P%', 'FT%', 'TS%']
+            for col in percentage_cols:
+                if col in self.players_data.columns:
+                    # Comprobar si hay valores muy pequeños (como 0.00667 en lugar de 0.667)
+                    small_values = (self.players_data[col] > 0) & (self.players_data[col] < 0.1)
+                    if small_values.any():
+                        logger.info(f"Corrigiendo valores pequeños en la columna {col} ({small_values.sum()} valores)")
+                        # Multiplicar por 100 los valores muy pequeños para corregirlos
+                        self.players_data.loc[small_values, col] = self.players_data.loc[small_values, col] * 100
+              
+            # Verificar y manejar valores NaN
+            nan_cols = []
+            for col in self.players_data.columns:
+                if self.players_data[col].isna().any():
+                    nan_cols.append(col)
+                    # Comprobar si es una columna categórica para evitar errores
+                    if pd.api.types.is_categorical_dtype(self.players_data[col]):
+                        # Para columnas categóricas, convertir a string primero
+                        self.players_data[col] = self.players_data[col].astype(str).fillna('MISSING')
+                    else:
+                        # Para columnas no categóricas, rellenar con 0
+                        self.players_data[col] = self.players_data[col].fillna(0)
+            
+            if nan_cols:
+                logger.warning(f"Se rellenaron valores NaN en {len(nan_cols)} columnas")
+                logger.debug(f"Columnas con NaN rellenados: {nan_cols[:10]} ...")
             
             # Filtrar características altamente correlacionadas si está habilitado
             if self.enable_correlation_analysis:
@@ -273,7 +274,7 @@ class PlayersFeatures:
                     'FT', 'FTA', 'FT%', 'TS%', 'ORB', 'DRB', 'TRB', 'AST', 'STL',
                     'BLK', 'TOV', 'PF', 'PTS', 'GmSc', 'BPM', '+/-', 'Pos', 'is_win',
                     'team_score', 'opp_score', 'total_score', 'point_diff', 'has_overtime',
-                    'overtime_periods', 'is_home', 'Height_Inches', 'Weight', 'BMI'
+                    'overtime_periods', 'is_home', 'Height_Inches', 'Weight', 'BMI', 'is_started'
                 ]
                 
                 # Filtrar solo columnas que existen en el DataFrame
@@ -332,7 +333,7 @@ class PlayersFeatures:
                 'FT', 'FTA', 'FT%', 'TS%', 'ORB', 'DRB', 'TRB', 'AST', 'STL',
                 'BLK', 'TOV', 'PF', 'PTS', 'GmSc', 'BPM', '+/-', 'Pos', 'is_win',
                 'team_score', 'opp_score', 'total_score', 'point_diff', 'has_overtime',
-                'overtime_periods', 'is_home', 'Height_Inches', 'Weight', 'BMI'
+                'overtime_periods', 'is_home', 'Height_Inches', 'Weight', 'BMI', 'is_started'
             ]
             
             # Filtrar las columnas base que existen en el DataFrame
@@ -1345,6 +1346,32 @@ class PlayersFeatures:
         logger.info("Creando características para líneas de apuestas")
         
         try:
+
+            # Validar existencia de columnas de medias y desviaciones antes de procesar
+            required_cols = {}
+            for stat in self.betting_lines.keys():
+                if stat in ['Double_Double', 'Triple_Double']:
+                    col_name = stat.lower()
+                    # Omitir validación de Double_Double y Triple_Double aquí
+                    # Se manejarán específicamente en _create_double_triple_features
+                    continue
+                else:
+                    col_name = stat
+                
+                if col_name not in self.players_data.columns:
+                    logger.warning(f"La columna {col_name} no existe en el DataFrame, omitiendo líneas de apuesta")
+                    continue
+                
+                required_cols[stat] = []
+                for window in self.window_sizes:
+                    mean_col = f'{col_name}_mean_{window}'
+                    std_col = f'{col_name}_std_{window}'
+                    if mean_col in self.players_data.columns and std_col in self.players_data.columns:
+                        required_cols[stat].append(window)
+                    else:
+                        logger.warning(f"Columnas {mean_col} o {std_col} no existen, omitiendo ventana {window} para {stat}")
+
+
             # Diccionario para almacenar todas las nuevas características
             new_features = {}
             
@@ -1600,231 +1627,172 @@ class PlayersFeatures:
     
     def _create_double_triple_features(self):
         """
-        Crea características específicas para predicciones de doble-doble y triple-doble
+        Crea características DERIVADAS para predicciones de doble-doble y triple-doble.
         """
-        logger.info("Creando características para doble-doble y triple-doble")
+        logger.info("Creando características derivadas para doble-doble y triple-doble")
         
         try:
-            # Verificar si tenemos las columnas básicas necesarias
-            if 'double_double' not in self.players_data.columns or 'triple_double' not in self.players_data.columns:
-                logger.warning("Columnas de double_double o triple_double no existen, recreándolas")
-                self._create_basic_features()
-            
-            # Verificar nuevamente
-            if 'double_double' not in self.players_data.columns:
-                logger.error("No se pudo crear la columna double_double, abortando creación de características")
-                return self.players_data
-            
-            # Validar datos de entrada
+            # 1. Calcular dobles y triples dobles base
             stats_for_double = ['PTS', 'TRB', 'AST', 'STL', 'BLK']
             available_stats = [stat for stat in stats_for_double if stat in self.players_data.columns]
+            
+            # Asegurar que las estadísticas base sean numéricas
             for stat in available_stats:
-                self.players_data[f'{stat}_double'] = (self.players_data[stat] >= 10).astype(int)
-                if self.players_data[stat].max() < 1:
-                    logger.warning(f"Scaling issue in {stat}, multiplying by 100")
-                    self.players_data[stat] *= 100
-
-            # Calcular stats_with_double si no existe
-            double_cols = [f'{stat}_double' for stat in available_stats if f'{stat}_double' in self.players_data.columns]
-            if double_cols and 'stats_with_double' not in self.players_data.columns:
-                self.players_data['stats_with_double'] = self.players_data[double_cols].sum(axis=1)
-
-
+                self.players_data[stat] = pd.to_numeric(self.players_data[stat], errors='coerce').fillna(0)
+            
+            # Crear columnas X_double
+            for stat in available_stats:
+                x_double_col = f'{stat}_double'
+                self.players_data[x_double_col] = (self.players_data[stat] >= 10).astype(int)
+                logger.info(f"Columna {x_double_col} creada")
+            
+            # Calcular double_double y triple_double
+            double_cols = [f'{stat}_double' for stat in available_stats]
+            self.players_data['double_double'] = (self.players_data[double_cols].sum(axis=1) >= 2).astype(int)
+            self.players_data['triple_double'] = (self.players_data[double_cols].sum(axis=1) >= 3).astype(int)
+            
+            # Verificación y logging inicial
+            dd_count = self.players_data['double_double'].sum()
+            td_count = self.players_data['triple_double'].sum()
+            logger.info(f"Se identificaron {dd_count} doble-dobles y {td_count} triple-dobles")
+            
+            # Verificar casos con PTS=0
+            zero_pts_dd = self.players_data[(self.players_data['PTS'] < 1) & (self.players_data['double_double'] == 1)]
+            if not zero_pts_dd.empty:
+                logger.info(f"VALIDACIÓN: Hay {len(zero_pts_dd)} doble-dobles sin puntos (legítimos)")
+            
+            # 2. Cálculo de tendencias temporales (tasas, medias, desviaciones)
             # Características para doble-doble
-            # Calcular tasa de doble-doble móvil para diferentes ventanas
             for window in self.window_sizes:
                 try:
-                    # Calcular tasa de doble-doble por jugador
+                    # Tasa de doble-doble por jugador a lo largo del tiempo
                     self.players_data[f'double_double_rate_{window}'] = self.players_data.groupby('Player')['double_double'].transform(
                         lambda x: pd.to_numeric(x, errors='coerce')
-                              .replace([np.inf, -np.inf], np.nan)
-                              .fillna(0)
-                              .rolling(window=min(window, len(x)), min_periods=1)
-                              .mean()
-                              .replace([np.inf, -np.inf], np.nan)
-                              .fillna(0)
+                                .rolling(window=min(window, len(x)), min_periods=1)
+                                .mean()
+                                .fillna(0)
                     )
                     
-                    # Calcular racha actual de doble-dobles
+                    # Media móvil para double_double
+                    if f'double_double_mean_{window}' not in self.players_data.columns:
+                        self.players_data[f'double_double_mean_{window}'] = self.players_data[f'double_double_rate_{window}']
+                    
+                    # Desviación estándar móvil para double_double
+                    if f'double_double_std_{window}' not in self.players_data.columns:
+                        self.players_data[f'double_double_std_{window}'] = self.players_data.groupby('Player')['double_double'].transform(
+                            lambda x: pd.to_numeric(x, errors='coerce')
+                                    .rolling(window=min(window, len(x)), min_periods=1)
+                                    .std()
+                                    .fillna(0)
+                        )
+                    
+                    # 3. Rachas de doble-dobles
                     for player in self.players_data['Player'].unique():
                         player_mask = self.players_data['Player'] == player
                         player_data = self.players_data.loc[player_mask].sort_values('Date').copy()
-                        
-                        # Inicializar rachas
                         streaks = []
                         current_streak = 0
-                        
-                        # Calcular racha para cada partido
                         for dd in player_data['double_double']:
                             if dd == 1:
                                 current_streak += 1
                             else:
                                 current_streak = 0
                             streaks.append(current_streak)
-                        
-                        # Asignar rachas al DataFrame
                         self.players_data.loc[player_data.index, 'double_double_streak'] = streaks
-                    
-                    # Crear estadísticas que contribuyen a doble-dobles
-                    # Para cada par de estadísticas, calcular la probabilidad de que ambas sean >= 10
-                    stats_for_double = ['PTS', 'TRB', 'AST', 'STL', 'BLK']
-                    available_stats = [stat for stat in stats_for_double if stat in self.players_data.columns]
-                    
-                    if len(available_stats) >= 2:
-                        # Calcular tasas de logro por estadística
-                        for stat in available_stats:
-                            stat_col = f'{stat}_double'
-                            rate_col = f'{stat}_double_rate_{window}'
-                            
-                            if stat_col in self.players_data.columns:
-                                # Calcular tasa de logro de esta estadística
-                                self.players_data[rate_col] = self.players_data.groupby('Player')[stat_col].transform(
-                                    lambda x: pd.to_numeric(x, errors='coerce')
-                                          .replace([np.inf, -np.inf], np.nan)
-                                          .fillna(0)
-                                          .rolling(window=min(window, len(x)), min_periods=1)
-                                          .mean()
-                                          .replace([np.inf, -np.inf], np.nan)
-                                          .fillna(0)
-                                )
                         
-                        # Para cada par de estadísticas, calcular la probabilidad conjunta
-                        for i, stat1 in enumerate(available_stats):
-                            for stat2 in available_stats[i+1:]:
-                                # Verificar si tenemos las columnas individuales
-                                stat1_col = f'{stat1}_double'
-                                stat2_col = f'{stat2}_double'
-                                
-                                if stat1_col in self.players_data.columns and stat2_col in self.players_data.columns:
-                                    # Crear columna de ocurrencia conjunta
-                                    joint_col = f'{stat1}_{stat2}_double'
-                                    joint_rate_col = f'{stat1}_{stat2}_double_rate_{window}'
-                                    
-                                    # Ambas estadísticas son >= 10
-                                    self.players_data[joint_col] = (
-                                        (self.players_data[stat1_col] == 1) & 
-                                        (self.players_data[stat2_col] == 1)
-                                    ).astype(int)
-                                    
-                                    # Calcular tasa de ocurrencia conjunta
-                                    self.players_data[joint_rate_col] = self.players_data.groupby('Player')[joint_col].transform(
-                                        lambda x: pd.to_numeric(x, errors='coerce')
-                                              .replace([np.inf, -np.inf], np.nan)
-                                              .fillna(0)
-                                              .rolling(window=min(window, len(x)), min_periods=1)
-                                              .mean()
-                                              .replace([np.inf, -np.inf], np.nan)
-                                              .fillna(0)
-                                    )
-                except Exception as e:
-                    logger.error(f"Error al calcular características para doble-doble con ventana {window}: {str(e)}")
-            
-            # Si tenemos la columna triple_double, crear características similares
-            if 'triple_double' in self.players_data.columns:
-                for window in self.window_sizes:
-                    try:
-                        # Calcular tasa de triple-doble por jugador
-                        self.players_data[f'triple_double_rate_{window}'] = self.players_data.groupby('Player')['triple_double'].transform(
+                    # 4. Características de triple-doble similares
+                    self.players_data[f'triple_double_rate_{window}'] = self.players_data.groupby('Player')['triple_double'].transform(
+                        lambda x: pd.to_numeric(x, errors='coerce')
+                                .rolling(window=min(window, len(x)), min_periods=1)
+                                .mean()
+                                .fillna(0)
+                    )
+                    
+                    if f'triple_double_mean_{window}' not in self.players_data.columns:
+                        self.players_data[f'triple_double_mean_{window}'] = self.players_data[f'triple_double_rate_{window}']
+                    
+                    if f'triple_double_std_{window}' not in self.players_data.columns:
+                        self.players_data[f'triple_double_std_{window}'] = self.players_data.groupby('Player')['triple_double'].transform(
                             lambda x: pd.to_numeric(x, errors='coerce')
-                                  .replace([np.inf, -np.inf], np.nan)
-                                  .fillna(0)
-                                  .rolling(window=min(window, len(x)), min_periods=1)
-                                  .mean()
-                                  .replace([np.inf, -np.inf], np.nan)
-                                  .fillna(0)
+                                    .rolling(window=min(window, len(x)), min_periods=1)
+                                    .std()
+                                    .fillna(0)
                         )
+                    
+                    # Rachas de triple-dobles
+                    for player in self.players_data['Player'].unique():
+                        player_mask = self.players_data['Player'] == player
+                        player_data = self.players_data.loc[player_mask].sort_values('Date').copy()
+                        streaks = []
+                        current_streak = 0
+                        for td in player_data['triple_double']:
+                            if td == 1:
+                                current_streak += 1
+                            else:
+                                current_streak = 0
+                            streaks.append(current_streak)
+                        self.players_data.loc[player_data.index, 'triple_double_streak'] = streaks
+                    
+                except Exception as e:
+                    logger.error(f"Error al calcular características derivadas con ventana {window}: {str(e)}")
+            
+            # 5. Características para pronósticos basados en umbrales de apuestas
+            for stat in ['Double_Double', 'Triple_Double']:
+                col_name = stat.lower()
+                if col_name not in self.players_data.columns:
+                    continue
+                    
+                # Verificar si el stat existe en betting_lines
+                if stat not in self.betting_lines:
+                    continue
+                    
+                for threshold in self.betting_lines[stat]:
+                    try:
+                        # Columna sobre umbral (sin modificar las columnas base)
+                        over_col = f'{col_name}_over_{threshold}'
+                        self.players_data[over_col] = (self.players_data[col_name] > threshold).astype(int)
                         
-                        # Calcular racha actual de triple-dobles
-                        for player in self.players_data['Player'].unique():
-                            player_mask = self.players_data['Player'] == player
-                            player_data = self.players_data.loc[player_mask].sort_values('Date').copy()
-                            
-                            # Inicializar rachas
-                            streaks = []
-                            current_streak = 0
-                            
-                            # Calcular racha para cada partido
-                            for td in player_data['triple_double']:
-                                if td == 1:
-                                    current_streak += 1
-                                else:
-                                    current_streak = 0
-                                streaks.append(current_streak)
-                            
-                            # Asignar rachas al DataFrame
-                            self.players_data.loc[player_data.index, 'triple_double_streak'] = streaks
+                        # Probabilidades por ventana
+                        for window in self.window_sizes:
+                            prob_col = f'{col_name}_prob_over_{threshold}_{window}'
+                            try:
+                                self.players_data[prob_col] = self.players_data.groupby('Player')[over_col].transform(
+                                    lambda x: pd.to_numeric(x, errors='coerce')
+                                            .rolling(window=min(window, len(x)), min_periods=1)
+                                            .mean()
+                                            .fillna(0)
+                                )
+                                
+                                # Tendencia respecto a ventanas más grandes
+                                if window < self.window_sizes[-1]:
+                                    next_window = next((w for w in self.window_sizes if w > window), None)
+                                    if next_window:
+                                        next_prob_col = f'{col_name}_prob_over_{threshold}_{next_window}'
+                                        
+                                        if next_prob_col in self.players_data.columns:
+                                            trend_col = f'{col_name}_trend_{threshold}_{window}'
+                                            self.players_data[trend_col] = (
+                                                self.players_data[prob_col] - 
+                                                self.players_data[next_prob_col]
+                                            ).clip(-1, 1).fillna(0)
+                            except Exception as e:
+                                logger.error(f"Error al calcular {prob_col}: {str(e)}")
                     except Exception as e:
-                        logger.error(f"Error al calcular características para triple-doble con ventana {window}: {str(e)}")
-            
-            # Crear características para pronósticos específicos de doble-doble y triple-doble
-            for threshold in self.betting_lines['Double_Double']:
-                try:
-                    # Crear características de pronóstico
-                    for window in self.window_sizes:
-                        # Verificar si tenemos las tasas calculadas
-                        if f'double_double_rate_{window}' in self.players_data.columns:
-                            # Probabilidad de doble-doble basada en tasas históricas
-                            self.players_data[f'double_double_prob_{window}'] = self.players_data[f'double_double_rate_{window}']
-                            
-                            # Tendencia de doble-doble (aumento o disminución respecto a ventanas más grandes)
-                            if window < self.window_sizes[-1]:
-                                next_window = next((w for w in self.window_sizes if w > window), None)
-                                if next_window and f'double_double_rate_{next_window}' in self.players_data.columns:
-                                    trend_col = f'double_double_trend_{window}'
-                                    self.players_data[trend_col] = (
-                                        self.players_data[f'double_double_rate_{window}'] - 
-                                        self.players_data[f'double_double_rate_{next_window}']
-                                    ).clip(-1, 1)
-                except Exception as e:
-                    logger.error(f"Error al crear características de pronóstico para doble-doble: {str(e)}")
-            
-            # Repetir para triple-doble si existe
-            for threshold in self.betting_lines['Triple_Double']:
-                try:
-                    # Crear características de pronóstico
-                    for window in self.window_sizes:
-                        # Verificar si tenemos las tasas calculadas
-                        if f'triple_double_rate_{window}' in self.players_data.columns:
-                            # Probabilidad de triple-doble basada en tasas históricas
-                            self.players_data[f'triple_double_prob_{window}'] = self.players_data[f'triple_double_rate_{window}']
-                            
-                            # Tendencia de triple-doble (aumento o disminución respecto a ventanas más grandes)
-                            if window < self.window_sizes[-1]:
-                                next_window = next((w for w in self.window_sizes if w > window), None)
-                                if next_window and f'triple_double_rate_{next_window}' in self.players_data.columns:
-                                    trend_col = f'triple_double_trend_{window}'
-                                    self.players_data[trend_col] = (
-                                        self.players_data[f'triple_double_rate_{window}'] - 
-                                        self.players_data[f'triple_double_rate_{next_window}']
-                                    ).clip(-1, 1)
-                except Exception as e:
-                    logger.error(f"Error al crear características de pronóstico para triple-doble: {str(e)}")
-            
-            # Rellenar valores nulos en columnas críticas
-            double_triple_cols = [col for col in self.players_data.columns if 'double_double' in col or 'triple_double' in col]
+                        logger.error(f"Error al crear características de pronóstico para {col_name}: {str(e)}")
+
+            # 6. Rellenar valores nulos en columnas derivadas
+            double_triple_cols = [col for col in self.players_data.columns 
+                                 if ('double' in col or 'triple' in col) and col not in ['double_double', 'triple_double']]
             for col in double_triple_cols:
                 if self.players_data[col].isnull().any():
-                    # Para columnas binarias, usar 0
-                    if col in ['double_double', 'triple_double']:
-                        self.players_data[col] = self.players_data[col].fillna(0)
-                    # Para tasas y probabilidades, usar 0
-                    elif 'rate' in col or 'prob' in col:
-                        self.players_data[col] = self.players_data[col].fillna(0)
-                    # Para rachas, usar 0
-                    elif 'streak' in col:
-                        self.players_data[col] = self.players_data[col].fillna(0)
-                    # Para tendencias, usar 0
-                    elif 'trend' in col:
-                        self.players_data[col] = self.players_data[col].fillna(0)
-                    else:
-                        self.players_data[col] = self.players_data[col].fillna(0)
-            
-            logger.info("Características para doble-doble y triple-doble creadas correctamente")
-            
+                    self.players_data[col] = self.players_data[col].fillna(0)
+
+            logger.info("Características derivadas para doble-doble y triple-doble creadas correctamente")
+        
         except Exception as e:
-            logger.error(f"Error al crear características para doble-doble y triple-doble: {str(e)}")
+            logger.error(f"Error al crear características derivadas: {str(e)}")
             logger.error(f"Traza de error: {traceback.format_exc()}")
-            
+        
         return self.players_data
     
     def _create_physical_features(self):
@@ -2383,102 +2351,126 @@ class PlayersFeatures:
     
     def _create_trb_prediction_features(self):
         """
-        Crea características específicas para la predicción de rebotes totales (TRB)
+        Crea características específicas para la predicción de rebotes totales (TRB) con mejoras en validación y tasas móviles.
         """
         logger.info("Creando características específicas para predicción de rebotes")
         
         try:
-            # 1. Características básicas de rebotes
+            # Verificar columnas necesarias
             if 'TRB' not in self.players_data.columns or 'MP' not in self.players_data.columns:
-                logger.warning("Faltan columnas necesarias para el análisis de rebotes")
-                return
-
-            # Rebotes por minuto (normaliza por tiempo de juego)
-            self.players_data['trb_per_minute'] = (self.players_data['TRB'] / self.players_data['MP'].clip(1)).clip(0, 2)
+                logger.warning("Faltan columnas necesarias para el análisis de rebotes (TRB, MP)")
+                return self.players_data
             
-            # Rebotes ofensivos/defensivos si están disponibles
+            # Validar y rellenar NaN
+            self.players_data['TRB'] = pd.to_numeric(self.players_data['TRB'], errors='coerce').fillna(0)
+            self.players_data['MP'] = pd.to_numeric(self.players_data['MP'], errors='coerce').fillna(0)
+            if 'Pos' in self.players_data.columns:
+                self.players_data['Pos'] = self.players_data['Pos'].fillna('F')
+            if 'is_home' in self.players_data.columns:
+                self.players_data['is_home'] = self.players_data['is_home'].fillna(0)
+            if 'is_win' in self.players_data.columns:
+                self.players_data['is_win'] = self.players_data['is_win'].fillna(0)
+            if 'Opp' in self.players_data.columns:
+                self.players_data['Opp'] = self.players_data['Opp'].fillna('UNK')
+            
+            # Ajustar MP para evitar división por 0
+            mp_default = self.players_data.groupby('Player')['MP'].transform('mean').clip(1)
+            mp_adjusted = self.players_data['MP'].where(self.players_data['MP'] > 0, mp_default)
+            
+            # 1. Características básicas de rebotes
+            self.players_data['trb_per_minute'] = (self.players_data['TRB'] / mp_adjusted).clip(0, 2)
+            self.players_data['trb_rate_5'] = self.players_data.groupby('Player')['TRB'].transform(
+                lambda x: x.rolling(window=5, min_periods=1).mean()
+            ).clip(0, 20).fillna(0)
+            
             if 'ORB' in self.players_data.columns and 'DRB' in self.players_data.columns:
-                self.players_data['orb_per_minute'] = (self.players_data['ORB'] / self.players_data['MP'].clip(1)).clip(0, 1)
-                self.players_data['drb_per_minute'] = (self.players_data['DRB'] / self.players_data['MP'].clip(1)).clip(0, 1.5)
+                self.players_data['ORB'] = pd.to_numeric(self.players_data['ORB'], errors='coerce').fillna(0)
+                self.players_data['DRB'] = pd.to_numeric(self.players_data['DRB'], errors='coerce').fillna(0)
+                self.players_data['orb_per_minute'] = (self.players_data['ORB'] / mp_adjusted).clip(0, 1)
+                self.players_data['drb_per_minute'] = (self.players_data['DRB'] / mp_adjusted).clip(0, 1.5)
                 self.players_data['orb_drb_ratio'] = (self.players_data['ORB'] / self.players_data['DRB'].clip(1)).clip(0, 5)
+                self.players_data['orb_rate_5'] = self.players_data.groupby('Player')['ORB'].transform(
+                    lambda x: x.rolling(window=5, min_periods=1).mean()
+                ).clip(0, 10).fillna(0)
+                self.players_data['drb_rate_5'] = self.players_data.groupby('Player')['DRB'].transform(
+                    lambda x: x.rolling(window=5, min_periods=1).mean()
+                ).clip(0, 15).fillna(0)
+            else:
+                logger.warning("No se encontraron columnas ORB o DRB para características adicionales")
             
             # 2. Características por posición
             if 'Pos' in self.players_data.columns:
+                pos_mapping = {
+                    'PG': 'G', 'SG': 'G', 'G': 'G', 'G-F': 'G-F',
+                    'SF': 'F', 'PF': 'F', 'F': 'F', 'F-G': 'F-G', 'F-C': 'F-C',
+                    'C': 'C', 'C-F': 'C-F'
+                }
+                self.players_data['mapped_pos'] = self.players_data['Pos'].map(pos_mapping).fillna('F')
+                
                 position_avg_trb = {}
                 for pos in ['G', 'G-F', 'F', 'F-G', 'F-C', 'C', 'C-F']:
-                    pos_mask = self.players_data['Pos'] == pos
-                    if pos_mask.sum() > 0:
+                    pos_mask = self.players_data['mapped_pos'] == pos
+                    if pos_mask.sum() >= 2:  # Reducir umbral
                         position_avg_trb[pos] = self.players_data.loc[pos_mask, 'TRB'].mean()
                 
-                # Rebotes relativos a la posición
                 self.players_data['trb_vs_position_avg'] = self.players_data.apply(
-                    lambda row: row['TRB'] / position_avg_trb.get(row['Pos'], 1.0) 
-                    if row['Pos'] in position_avg_trb and position_avg_trb[row['Pos']] > 0 else 1.0,
+                    lambda row: row['TRB'] / position_avg_trb.get(row['mapped_pos'], 5.0)
+                    if row['mapped_pos'] in position_avg_trb and position_avg_trb[row['mapped_pos']] > 0 else 1.0,
                     axis=1
                 ).clip(0, 3)
             
-            # 3. Características físicas relacionadas con rebotes
+            # 3. Características físicas
             if 'Height_Inches' in self.players_data.columns:
+                self.players_data['Height_Inches'] = pd.to_numeric(self.players_data['Height_Inches'], errors='coerce').fillna(78)
                 self.players_data['trb_per_height'] = (self.players_data['TRB'] / self.players_data['Height_Inches'].clip(60)).clip(0, 0.5)
+            else:
+                logger.warning("No se encontró columna Height_Inches para características físicas")
             
             if 'Weight' in self.players_data.columns:
+                self.players_data['Weight'] = pd.to_numeric(self.players_data['Weight'], errors='coerce').fillna(200)
                 self.players_data['trb_per_weight'] = (self.players_data['TRB'] * 10 / self.players_data['Weight'].clip(150)).clip(0, 1)
+            else:
+                logger.warning("No se encontró columna Weight para características físicas")
             
             # 4. Factores contextuales
-            # Diferencia entre casa/visitante
             if 'is_home' in self.players_data.columns:
                 for player in self.players_data['Player'].unique():
                     player_mask = self.players_data['Player'] == player
-                    if player_mask.sum() < 5:  # Solo si hay suficientes datos
+                    if player_mask.sum() < 5:  
                         continue
-                        
-                    home_mask = self.players_data['is_home'] == True
-                    away_mask = self.players_data['is_home'] == False
-                    
+                    home_mask = self.players_data['is_home'] == 1
+                    away_mask = self.players_data['is_home'] == 0
                     if (player_mask & home_mask).sum() > 0 and (player_mask & away_mask).sum() > 0:
                         home_avg = self.players_data.loc[player_mask & home_mask, 'TRB'].mean()
                         away_avg = self.players_data.loc[player_mask & away_mask, 'TRB'].mean()
-                        
-                        # Diferencia entre casa y fuera
-                        self.players_data.loc[player_mask, 'trb_home_away_diff'] = home_avg - away_avg
+                        self.players_data.loc[player_mask, 'trb_home_away_diff'] = (home_avg - away_avg).clip(-5, 5)
             
-            # Diferencia entre victorias/derrotas
             if 'is_win' in self.players_data.columns:
                 for player in self.players_data['Player'].unique():
                     player_mask = self.players_data['Player'] == player
-                    if player_mask.sum() < 5:  # Solo si hay suficientes datos
+                    if player_mask.sum() < 5:
                         continue
-                        
-                    win_mask = self.players_data['is_win'] == True
-                    loss_mask = self.players_data['is_win'] == False
-                    
+                    win_mask = self.players_data['is_win'] == 1
+                    loss_mask = self.players_data['is_win'] == 0
                     if (player_mask & win_mask).sum() > 0 and (player_mask & loss_mask).sum() > 0:
                         win_avg = self.players_data.loc[player_mask & win_mask, 'TRB'].mean()
                         loss_avg = self.players_data.loc[player_mask & loss_mask, 'TRB'].mean()
-                        
-                        # Diferencia entre victorias y derrotas
-                        self.players_data.loc[player_mask, 'trb_win_loss_diff'] = win_avg - loss_avg
+                        self.players_data.loc[player_mask, 'trb_win_loss_diff'] = (win_avg - loss_avg).clip(-5, 5)
             
             # 5. Rebotes contra oponentes específicos
-            for player in self.players_data['Player'].unique():
-                player_mask = self.players_data['Player'] == player
-                player_data = self.players_data[player_mask].copy()
-                
-                if len(player_data) < 5:  # Omitir jugadores con pocos datos
-                    continue
-                    
-                # Media general del jugador
-                player_avg_trb = player_data['TRB'].mean()
-                
-                # Para cada oponente
-                for opp in player_data['Opp'].unique():
-                    opp_mask = player_data['Opp'] == opp
-                    if opp_mask.sum() >= 2:  # Al menos 2 partidos contra este oponente
-                        opp_avg_trb = player_data.loc[opp_mask, 'TRB'].mean()
-                        
-                        # Diferencia vs promedio
-                        diff = opp_avg_trb - player_avg_trb
-                        self.players_data.loc[player_mask & (self.players_data['Opp'] == opp), 'trb_vs_opp_diff'] = diff
+            if 'Opp' in self.players_data.columns:
+                for player in self.players_data['Player'].unique():
+                    player_mask = self.players_data['Player'] == player
+                    player_data = self.players_data[player_mask].copy()
+                    if len(player_data) < 5:
+                        continue
+                    player_avg_trb = player_data['TRB'].mean()
+                    for opp in player_data['Opp'].unique():
+                        opp_mask = player_data['Opp'] == opp
+                        if opp_mask.sum() >= 1:  # Reducir umbral
+                            opp_avg_trb = player_data.loc[opp_mask, 'TRB'].mean()
+                            diff = (opp_avg_trb - player_avg_trb).clip(-5, 5)
+                            self.players_data.loc[player_mask & (self.players_data['Opp'] == opp), 'trb_vs_opp_diff'] = diff
             
             # Rellenar valores faltantes
             for col in ['trb_home_away_diff', 'trb_win_loss_diff', 'trb_vs_opp_diff']:
@@ -2486,6 +2478,7 @@ class PlayersFeatures:
                     self.players_data[col] = self.players_data[col].fillna(0)
             
             logger.info("Características de rebotes creadas correctamente")
+        
         except Exception as e:
             logger.error(f"Error al crear características para predicción de rebotes: {str(e)}")
             logger.error(traceback.format_exc())
@@ -2499,10 +2492,15 @@ class PlayersFeatures:
         logger.info("Creando características específicas para predicción de asistencias")
         
         try:
-            # 1. Características básicas de asistencias
+            
+            # Verificar columnas necesarias
             if 'AST' not in self.players_data.columns or 'MP' not in self.players_data.columns:
                 logger.warning("Faltan columnas necesarias para el análisis de asistencias")
                 return
+            
+            # Ajustar MP para evitar división por 0
+            mp_default = self.players_data.groupby('Player')['MP'].transform('mean').clip(1)
+            mp_adjusted = self.players_data['MP'].where(self.players_data['MP'] > 0, mp_default)
 
             # Asistencias por minuto (normaliza por tiempo de juego)
             self.players_data['ast_per_minute'] = (self.players_data['AST'] / self.players_data['MP'].clip(1)).clip(0, 1)
@@ -2513,24 +2511,32 @@ class PlayersFeatures:
             
             # 2. Características por posición
             if 'Pos' in self.players_data.columns:
+                pos_mapping = {
+                    'PG': 'G', 'SG': 'G', 'G': 'G', 'G-F': 'G-F',
+                    'SF': 'F', 'PF': 'F', 'F': 'F', 'F-G': 'F-G', 'F-C': 'F-C',
+                    'C': 'C', 'C-F': 'C-F'
+                }
+                self.players_data['mapped_pos'] = self.players_data['Pos'].map(pos_mapping).fillna('F')
+                
                 position_avg_ast = {}
                 for pos in ['G', 'G-F', 'F', 'F-G', 'F-C', 'C', 'C-F']:
-                    pos_mask = self.players_data['Pos'] == pos
-                    if pos_mask.sum() > 0:
+                    pos_mask = self.players_data['mapped_pos'] == pos
+                    if pos_mask.sum() >= 5:  
                         position_avg_ast[pos] = self.players_data.loc[pos_mask, 'AST'].mean()
                 
-                # Asistencias relativas a la posición
                 self.players_data['ast_vs_position_avg'] = self.players_data.apply(
-                    lambda row: row['AST'] / position_avg_ast.get(row['Pos'], 1.0) 
-                    if row['Pos'] in position_avg_ast and position_avg_ast[row['Pos']] > 0 else 1.0,
+                    lambda row: row['AST'] / position_avg_ast.get(row['mapped_pos'], 3.0)
+                    if row['mapped_pos'] in position_avg_ast and position_avg_ast[row['mapped_pos']] > 0 else 1.0,
                     axis=1
                 ).clip(0, 5)
                 
-                # Calificación de playmaking por posición
-                # Guards deberían tener más asistencias que forwards/centers
                 if 'is_guard' in self.players_data.columns:
+                    self.players_data['is_guard'] = pd.to_numeric(self.players_data['is_guard'], errors='coerce').fillna(0)
                     guard_avg_ast = self.players_data[self.players_data['is_guard'] == 1]['AST'].mean()
-                    self.players_data['playmaking_rating'] = (self.players_data['AST'] / guard_avg_ast).clip(0, 3)
+                    guard_avg_ast = max(guard_avg_ast, 3.0)  
+                    self.players_data['playmaking_rating'] = ((self.players_data['AST'] / mp_adjusted * 36) / guard_avg_ast).clip(0, 3)
+                else:
+                    logger.warning("No se encontró columna is_guard para calcular playmaking_rating")
             
             # 3. Factores contextuales
             # Diferencia entre casa/visitante
@@ -3198,9 +3204,9 @@ class PlayersFeatures:
                 ).clip(-10, 20).fillna(0)
             
             # 9. Score ratio (Proporción de la puntuación del equipo)
-            if all(col in self.players_data.columns for col in ['PTS', 'TM_PTS']):
+            if all(col in self.players_data.columns for col in ['PTS', 'Team_Score']):
                 self.players_data['scoring_ratio'] = (
-                    self.players_data['PTS'] / self.players_data['TM_PTS'].clip(50)
+                    self.players_data['PTS'] / self.players_data['Team_Score'].clip(50)
                 ).clip(0, 0.7).fillna(0.1)
             
             # 10. Índice de consistencia (basado en la desviación estándar de ventanas)
@@ -3291,7 +3297,7 @@ class PlayersFeatures:
                 'FT', 'FTA', 'FT%', 'TS%', 'ORB', 'DRB', 'TRB', 'AST', 'STL',
                 'BLK', 'TOV', 'PF', 'PTS', 'GmSc', 'BPM', '+/-', 'Pos', 'is_win',
                 'team_score', 'opp_score', 'total_score', 'point_diff', 'has_overtime',
-                'overtime_periods', 'is_home', 'Height_Inches', 'Weight', 'BMI'
+                'overtime_periods', 'is_home', 'Height_Inches', 'Weight', 'BMI', 'is_started'
             ]
             present_essential_cols = [col for col in essential_cols if col in X.columns]
             
@@ -3385,3 +3391,186 @@ class PlayersFeatures:
             logger.error(traceback.format_exc())
             # En caso de error, devolver el DataFrame original
             return X
+    
+    def _create_starter_features(self):
+        """
+        Crea características basadas en si el jugador fue titular (is_started) o suplente.
+        Analiza patrones de rendimiento en diferentes roles.
+        """
+        logger.info("Creando características de titular vs suplente")
+        
+        try:
+            # Verificar si tenemos la columna is_started
+            if 'is_started' not in self.players_data.columns:
+                logger.error("No se encontró columna is_started, no se pueden crear características de titular")
+                return
+            
+            # Asegurar que is_started sea binaria (0 o 1)
+            self.players_data['is_started'] = pd.to_numeric(self.players_data['is_started'], errors='coerce').fillna(0).astype(int)
+            
+            # Estadísticas principales a analizar
+            main_stats = ['PTS', 'TRB', 'AST', 'STL', 'BLK', 'TOV', 'PF', 'FG%', '3P%', 'FT%']
+            available_stats = [stat for stat in main_stats if stat in self.players_data.columns]
+            
+            # 1. Diferencia de rendimiento como titular vs suplente
+            for stat in available_stats:
+                # Convertir a numérico
+                self.players_data[stat] = pd.to_numeric(self.players_data[stat], errors='coerce').fillna(0)
+                
+                # Para cada jugador, calcular promedio como titular y como suplente
+                for player in self.players_data['Player'].unique():
+                    player_mask = self.players_data['Player'] == player
+                    player_data = self.players_data[player_mask]
+                    
+                    # Solo procesar si hay suficientes partidos en ambos roles
+                    starter_data = player_data[player_data['is_started'] == 1]
+                    bench_data = player_data[player_data['is_started'] == 0]
+                    
+                    if len(starter_data) >= 3 and len(bench_data) >= 3:
+                        # Calcular promedios
+                        starter_avg = starter_data[stat].mean()
+                        bench_avg = bench_data[stat].mean()
+                        
+                        # Diferencia y ratio
+                        if bench_avg > 0:
+                            starter_impact = ((starter_avg / bench_avg) - 1) * 100  # % de mejora como titular
+                        else:
+                            starter_impact = 0 if starter_avg == 0 else 100  # Si bench_avg es 0, evitar división por cero
+                        
+                        # Asignar a todos los registros del jugador
+                        self.players_data.loc[player_mask, f'{stat}_starter_impact'] = starter_impact
+                                    
+            # 2. Consistencia en diferentes roles
+            for stat in ['PTS', 'TRB', 'AST']:
+                if stat in self.players_data.columns:
+                    # Para cada jugador, calcular desviación estándar como titular y como suplente
+                    for player in self.players_data['Player'].unique():
+                        player_mask = self.players_data['Player'] == player
+                        
+                        # Filtrar datos de titular y suplente
+                        starter_data = self.players_data.loc[player_mask & (self.players_data['is_started'] == 1), stat]
+                        bench_data = self.players_data.loc[player_mask & (self.players_data['is_started'] == 0), stat]
+                        
+                        if len(starter_data) >= 5:
+                            starter_std = starter_data.std()
+                            starter_mean = starter_data.mean()
+                            if starter_mean > 0:
+                                starter_cv = (starter_std / starter_mean) * 100  # Coeficiente de variación
+                                self.players_data.loc[player_mask, f'{stat}_starter_cv'] = starter_cv
+                        
+                        if len(bench_data) >= 5:
+                            bench_std = bench_data.std()
+                            bench_mean = bench_data.mean()
+                            if bench_mean > 0:
+                                bench_cv = (bench_std / bench_mean) * 100  # Coeficiente de variación
+                                self.players_data.loc[player_mask, f'{stat}_bench_cv'] = bench_cv
+            
+            # 3. Tendencias a lo largo del tiempo en cada rol
+            for window in self.window_sizes:
+                for stat in ['PTS', 'TRB', 'AST']:
+                    if stat in self.players_data.columns:
+                        # Crear características de tendencia para cada rol
+                        self.players_data[f'{stat}_as_starter_{window}'] = 0
+                        self.players_data[f'{stat}_as_bench_{window}'] = 0
+                        
+                        # Procesar jugador por jugador
+                        for player in self.players_data['Player'].unique():
+                            player_mask = self.players_data['Player'] == player
+                            player_data = self.players_data.loc[player_mask].sort_values('Date')
+                            
+                            # Calcular tendencias como titular
+                            starter_mask = player_data['is_started'] == 1
+                            if starter_mask.sum() >= 3:
+                                self.players_data.loc[player_mask & starter_mask, f'{stat}_as_starter_{window}'] = \
+                                    player_data.loc[starter_mask, stat].rolling(window=min(window, starter_mask.sum()), 
+                                                                             min_periods=1).mean()
+                            
+                            # Calcular tendencias como suplente
+                            bench_mask = player_data['is_started'] == 0
+                            if bench_mask.sum() >= 3:
+                                self.players_data.loc[player_mask & bench_mask, f'{stat}_as_bench_{window}'] = \
+                                    player_data.loc[bench_mask, stat].rolling(window=min(window, bench_mask.sum()), 
+                                                                           min_periods=1).mean()
+            
+            # 4. Características de predicción para líneas de apuestas según rol
+            for stat, thresholds in self.betting_lines.items():
+                if stat in ['PTS', 'TRB', 'AST', '3P'] and stat in self.players_data.columns:
+                    for threshold in thresholds:
+                        # Calcular ratio de superación del umbral como titular vs suplente
+                        starter_over_col = f'{stat}_starter_over_{threshold}'
+                        bench_over_col = f'{stat}_bench_over_{threshold}'
+                        
+                        # Inicializar columnas
+                        self.players_data[starter_over_col] = 0
+                        self.players_data[bench_over_col] = 0
+                        
+                        # Calcular por jugador
+                        for player in self.players_data['Player'].unique():
+                            player_mask = self.players_data['Player'] == player
+                            
+                            # Datos como titular
+                            starter_data = self.players_data.loc[player_mask & (self.players_data['is_started'] == 1)]
+                            if len(starter_data) >= 5:
+                                starter_over_rate = (starter_data[stat] > threshold).mean()
+                                self.players_data.loc[player_mask, starter_over_col] = starter_over_rate
+                            
+                            # Datos como suplente
+                            bench_data = self.players_data.loc[player_mask & (self.players_data['is_started'] == 0)]
+                            if len(bench_data) >= 5:
+                                bench_over_rate = (bench_data[stat] > threshold).mean()
+                                self.players_data.loc[player_mask, bench_over_col] = bench_over_rate
+                            
+                            # Diferencia entre tasas
+                            if len(starter_data) >= 5 and len(bench_data) >= 5:
+                                self.players_data.loc[player_mask, f'{stat}_role_diff_{threshold}'] = \
+                                    self.players_data.loc[player_mask, starter_over_col] - \
+                                    self.players_data.loc[player_mask, bench_over_col]
+            
+            # 5. Características de minutos jugados según rol
+            if 'MP' in self.players_data.columns:
+                # Media de minutos como titular y como suplente
+                for player in self.players_data['Player'].unique():
+                    player_mask = self.players_data['Player'] == player
+                    
+                    # Minutos como titular
+                    starter_mp = self.players_data.loc[player_mask & (self.players_data['is_started'] == 1), 'MP']
+                    if len(starter_mp) >= 3:
+                        self.players_data.loc[player_mask, 'MP_as_starter_avg'] = starter_mp.mean()
+                    
+                    # Minutos como suplente
+                    bench_mp = self.players_data.loc[player_mask & (self.players_data['is_started'] == 0), 'MP']
+                    if len(bench_mp) >= 3:
+                        self.players_data.loc[player_mask, 'MP_as_bench_avg'] = bench_mp.mean()
+                    
+                    # Ratio entre ambos
+                    if len(starter_mp) >= 3 and len(bench_mp) >= 3 and bench_mp.mean() > 0:
+                        self.players_data.loc[player_mask, 'MP_starter_to_bench_ratio'] = \
+                            starter_mp.mean() / bench_mp.mean()
+            
+            # 6. Identificar "spark plugs" (jugadores que rinden mejor saliendo del banquillo)
+            self.players_data['is_spark_plug'] = 0
+            for player in self.players_data['Player'].unique():
+                player_mask = self.players_data['Player'] == player
+                
+                # Verificar si hay suficientes partidos en ambos roles
+                starter_games = self.players_data.loc[player_mask & (self.players_data['is_started'] == 1)]
+                bench_games = self.players_data.loc[player_mask & (self.players_data['is_started'] == 0)]
+                
+                if len(starter_games) >= 5 and len(bench_games) >= 5:
+                    # Comparar rendimiento por minuto para neutralizar diferencia de minutos
+                    if 'MP' in self.players_data.columns and 'PTS' in self.players_data.columns:
+                        # Puntos por minuto
+                        starter_ppm = (starter_games['PTS'] / starter_games['MP'].clip(lower=1)).mean()
+                        bench_ppm = (bench_games['PTS'] / bench_games['MP'].clip(lower=1)).mean()
+                        
+                        # Si rinde mejor saliendo del banquillo
+                        if bench_ppm > starter_ppm * 1.1:  # Al menos 10% mejor como suplente
+                            self.players_data.loc[player_mask, 'is_spark_plug'] = 1
+            
+            logger.info("Características de titular vs suplente creadas correctamente")
+            
+        except Exception as e:
+            logger.error(f"Error al crear características de titular vs suplente: {str(e)}")
+            logger.error(traceback.format_exc())
+        
+        return self.players_data

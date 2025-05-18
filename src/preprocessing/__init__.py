@@ -3,9 +3,9 @@ Módulo de preprocesamiento para IABET
 
 Contiene las clases y funciones necesarias para:
 - Carga y validación de datos
+- Parseo de columnas (results)
 - Ingeniería de características (Teams and Players)
 - Generación de secuencias temporales
-- Parseo de resultados
 """
 
 from .data_loader import NBADataLoader

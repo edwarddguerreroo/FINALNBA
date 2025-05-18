@@ -12,7 +12,9 @@ import time
 import warnings
 from src.preprocessing.results_parser.player_parser import ResultParser
 from src.preprocessing.results_parser.teams_parser import TeamsParser
+import logging
 
+logger = logging.getLogger(__name__)
 
 class NBADataLoader:
     """
@@ -88,7 +90,7 @@ class NBADataLoader:
         # Calcular is_home basado en Away
         # Away es '@' cuando es visitante, '' cuando es local
         df['is_home'] = (df['Away'] != '@').astype(int)
-        
+
         # Limpiar valores no válidos
         numeric_columns = df.select_dtypes(include=[np.number]).columns
         df[numeric_columns] = df[numeric_columns].replace([np.inf, -np.inf], np.nan)
@@ -129,6 +131,7 @@ class NBADataLoader:
         - Convierte fechas
         - Parsea resultados
         - Calcula is_home basado en Away
+        - Calcula is_started en base a GS
         - Limpia y valida valores
         """
         # Copiar DataFrame
@@ -143,6 +146,14 @@ class NBADataLoader:
         # Calcular is_home basado en Away
         # Away es '@' cuando es visitante, '' cuando es local
         df['is_home'] = (df['Away'] != '@').astype(int)
+
+        # Calcular is_started en base a GS
+        # GS es '*' cuando es titular, '' cuando no es titular
+        # Verificar valores únicos en GS para diagnóstico
+        unique_gs_values = df['GS'].unique()
+        
+        # Convertir GS a is_started (1 si es titular, 0 si no)
+        df['is_started'] = (df['GS'] == '*').astype(int)
         
         # Limpiar valores no válidos
         numeric_columns = df.select_dtypes(include=[np.number]).columns

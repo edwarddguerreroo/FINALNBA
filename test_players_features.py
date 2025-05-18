@@ -465,7 +465,7 @@ class PlayerFeatureTester:
                     'FT', 'FTA', 'FT%', 'TS%', 'ORB', 'DRB', 'TRB', 'AST', 'STL',
                     'BLK', 'TOV', 'PF', 'PTS', 'GmSc', 'BPM', '+/-', 'Pos', 'is_win',
                     'team_score', 'opp_score', 'total_score', 'point_diff', 'has_overtime',
-                    'overtime_periods', 'is_home', 'Height_Inches', 'Weight', 'BMI'
+                    'overtime_periods', 'is_home', 'Height_Inches', 'Weight', 'BMI', 'is_started'
                 ]
                 
                 # Filtrar columnas numéricas que no están en la lista de protegidas
