@@ -381,49 +381,75 @@ class SequenceGenerator:
                             try:
                                 # Intentar diferentes formas de obtener valor de Win
                                 if 'Win' in target_row:
-                                    target_val = 1 if target_row['Win'] else 0
+                                    target_val = 1 if bool(target_row['Win']) else 0
                                 elif 'is_win' in target_row:
-                                    target_val = 1 if target_row['is_win'] else 0
+                                    target_val = 1 if bool(target_row['is_win']) else 0
                                 elif 'Result' in target_row:
                                     # Posiblemente Result contenga W/L
                                     target_val = 1 if str(target_row['Result']).strip().upper().startswith('W') else 0
                                 else:
                                     # Si no hay columna directa, intentar inferir por los puntos
                                     if 'PTS' in target_row and 'PTS_Opp' in target_row:
-                                        target_val = 1 if target_row['PTS'] > target_row['PTS_Opp'] else 0
+                                        pts = float(target_row['PTS']) if not pd.isna(target_row['PTS']) else 0
+                                        pts_opp = float(target_row['PTS_Opp']) if not pd.isna(target_row['PTS_Opp']) else 0
+                                        target_val = 1 if pts > pts_opp else 0
                                     else:
-                                        logger.warning(f"No se pudo determinar Win/Loss para el equipo")
+                                        logger.warning(f"No se pudo determinar Win/Loss para equipo virtual")
                                         continue
+                                
+                                # Asegurar que el valor es binario (0 o 1)
+                                target_val = 1 if target_val else 0
+                            except (TypeError, ValueError) as e:
+                                logger.error(f"Error de tipo de datos procesando target Win para equipo virtual: {str(e)}")
+                                continue
                             except Exception as e:
-                                logger.error(f"Error procesando target Win: {str(e)}")
+                                logger.error(f"Error procesando target Win para equipo virtual: {str(e)}")
                                 continue
                         elif stat == 'Total_Points_Over_Under':
                             try:
                                 # Intentar diferentes formas de obtener el total de puntos
                                 if 'total_score' in target_row:
-                                    target_val = target_row['total_score']
+                                    target_val = float(target_row['total_score'])
                                 elif 'total_points' in target_row:
-                                    target_val = target_row['total_points']
+                                    target_val = float(target_row['total_points'])
                                 elif 'PTS' in target_row and 'PTS_Opp' in target_row:
-                                    target_val = target_row['PTS'] + target_row['PTS_Opp']
+                                    target_val = float(target_row['PTS']) + float(target_row['PTS_Opp'])
                                 else:
-                                    logger.warning(f"No se pudo determinar el total de puntos")
+                                    logger.warning(f"No se pudo determinar el total de puntos para {team}")
                                     continue
+                                    
+                                # Verificar que el valor no sea nulo o negativo
+                                if pd.isna(target_val) or target_val < 0:
+                                    logger.warning(f"Valor de puntos totales inválido para {team}: {target_val}")
+                                    continue
+                            except (TypeError, ValueError) as e:
+                                logger.error(f"Error de tipo de datos procesando target Total_Points_Over_Under para {team}: {str(e)}")
+                                continue
                             except Exception as e:
-                                logger.error(f"Error procesando target Total_Points_Over_Under: {str(e)}")
+                                logger.error(f"Error procesando target Total_Points_Over_Under para {team}: {str(e)}")
                                 continue
                         elif stat == 'Team_Points_Over_Under':
                             try:
                                 # Intentar diferentes formas de obtener los puntos del equipo
                                 if 'team_score' in target_row:
-                                    target_val = target_row['team_score']
+                                    target_val = float(target_row['team_score'])
                                 elif 'PTS' in target_row:
-                                    target_val = target_row['PTS']
+                                    target_val = float(target_row['PTS'])
+                                elif 'points' in target_row:
+                                    target_val = float(target_row['points'])
                                 else:
-                                    logger.warning(f"No se pudo determinar los puntos del equipo")
+                                    logger.warning(f"No se pudo determinar los puntos del equipo virtual")
                                     continue
+                                    
+                                # Verificar que el valor no sea nulo o negativo
+                                if pd.isna(target_val) or target_val < 0:
+                                    logger.warning(f"Valor de puntos inválido para equipo virtual: {target_val}")
+                                    continue
+                            except (TypeError, ValueError) as e:
+                                logger.error(f"Error de tipo de datos procesando target Team_Points_Over_Under para equipo virtual: {str(e)}")
+                                continue
                             except Exception as e:
-                                logger.error(f"Error procesando target Team_Points_Over_Under: {str(e)}")
+                                logger.error(f"Error procesando target Team_Points_Over_Under para equipo virtual: {str(e)}")
                                 continue
                         else:
                             logger.warning(f"Target no soportado: {stat}")
@@ -501,50 +527,76 @@ class SequenceGenerator:
                                 try:
                                     # Intentar diferentes formas de obtener valor de Win
                                     if 'Win' in target_row:
-                                        target_val = 1 if target_row['Win'] else 0
+                                        target_val = 1 if bool(target_row['Win']) else 0
                                     elif 'is_win' in target_row:
-                                        target_val = 1 if target_row['is_win'] else 0
+                                        target_val = 1 if bool(target_row['is_win']) else 0
                                     elif 'Result' in target_row:
                                         # Posiblemente Result contenga W/L
                                         target_val = 1 if str(target_row['Result']).strip().upper().startswith('W') else 0
                                     else:
                                         # Si no hay columna directa, intentar inferir por los puntos
                                         if 'PTS' in target_row and 'PTS_Opp' in target_row:
-                                            target_val = 1 if target_row['PTS'] > target_row['PTS_Opp'] else 0
+                                            pts = float(target_row['PTS']) if not pd.isna(target_row['PTS']) else 0
+                                            pts_opp = float(target_row['PTS_Opp']) if not pd.isna(target_row['PTS_Opp']) else 0
+                                            target_val = 1 if pts > pts_opp else 0
                                         else:
-                                            logger.warning(f"No se pudo determinar Win/Loss para el equipo")
+                                            logger.warning(f"No se pudo determinar Win/Loss para equipo virtual")
                                             continue
+                                
+                                    # Asegurar que el valor es binario (0 o 1)
+                                    target_val = 1 if target_val else 0
+                                except (TypeError, ValueError) as e:
+                                    logger.error(f"Error de tipo de datos procesando target Win para equipo virtual: {str(e)}")
+                                    continue
                                 except Exception as e:
-                                    logger.error(f"Error procesando target Win: {str(e)}")
+                                    logger.error(f"Error procesando target Win para equipo virtual: {str(e)}")
                                     continue
                             elif stat == 'Total_Points_Over_Under':
                                 try:
                                     # Intentar diferentes formas de obtener el total de puntos
                                     if 'total_score' in target_row:
-                                        target_val = target_row['total_score']
+                                        target_val = float(target_row['total_score'])
                                     elif 'total_points' in target_row:
-                                        target_val = target_row['total_points']
+                                        target_val = float(target_row['total_points'])
                                     elif 'PTS' in target_row and 'PTS_Opp' in target_row:
-                                        target_val = target_row['PTS'] + target_row['PTS_Opp']
+                                        target_val = float(target_row['PTS']) + float(target_row['PTS_Opp'])
                                     else:
-                                        logger.warning(f"No se pudo determinar el total de puntos")
+                                        logger.warning(f"No se pudo determinar el total de puntos para {team}")
                                         continue
-                                except Exception as e:
-                                    logger.error(f"Error procesando target Total_Points_Over_Under: {str(e)}")
+                                    
+                                    # Verificar que el valor no sea nulo o negativo
+                                    if pd.isna(target_val) or target_val < 0:
+                                        logger.warning(f"Valor de puntos totales inválido para {team}: {target_val}")
+                                        continue
+                                except (TypeError, ValueError) as e:
+                                    logger.error(f"Error de tipo de datos procesando target Total_Points_Over_Under para {team}: {str(e)}")
                                     continue
+                                except Exception as e:
+                                    logger.error(f"Error procesando target Total_Points_Over_Under para {team}: {str(e)}")
+                                continue
                             elif stat == 'Team_Points_Over_Under':
                                 try:
                                     # Intentar diferentes formas de obtener los puntos del equipo
                                     if 'team_score' in target_row:
-                                        target_val = target_row['team_score']
+                                        target_val = float(target_row['team_score'])
                                     elif 'PTS' in target_row:
-                                        target_val = target_row['PTS']
+                                        target_val = float(target_row['PTS'])
+                                    elif 'points' in target_row:
+                                        target_val = float(target_row['points'])
                                     else:
-                                        logger.warning(f"No se pudo determinar los puntos del equipo")
+                                        logger.warning(f"No se pudo determinar los puntos del equipo virtual")
                                         continue
-                                except Exception as e:
-                                    logger.error(f"Error procesando target Team_Points_Over_Under: {str(e)}")
+                                    
+                                    # Verificar que el valor no sea nulo o negativo
+                                    if pd.isna(target_val) or target_val < 0:
+                                        logger.warning(f"Valor de puntos inválido para equipo virtual: {target_val}")
+                                        continue
+                                except (TypeError, ValueError) as e:
+                                    logger.error(f"Error de tipo de datos procesando target Team_Points_Over_Under para equipo virtual: {str(e)}")
                                     continue
+                                except Exception as e:
+                                    logger.error(f"Error procesando target Team_Points_Over_Under para equipo virtual: {str(e)}")
+                                continue
                             else:
                                 logger.warning(f"Target no soportado: {stat}")
                                 continue
