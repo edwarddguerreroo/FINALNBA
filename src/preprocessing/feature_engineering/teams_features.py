@@ -56,8 +56,8 @@ class TeamsFeatures:
         self.n_jobs = n_jobs
         self.betting_lines = {
             'Win': [0.5],  # Para predicciones binarias de victoria
-            'Total_Points_Over_Under': [190, 195, 200, 205, 210, 215, 220, 225, 230, 235],  # Total de puntos en juego
-            'Team_Points_Over_Under': [90, 95, 100, 105, 110, 115, 120, 125, 130]  # Puntos de equipo
+            'Total_Points_Over_Under': [180, 185, 190, 195, 200, 205, 210, 215, 220, 225, 230, 235],  # Total de puntos en juego
+            'Team_Points_Over_Under': [80, 85, 90, 95, 100, 105, 110, 115, 120, 125, 130]  # Puntos de equipo
         }
         
         # Asegurar que las fechas estén en formato datetime
@@ -3137,7 +3137,8 @@ class TeamsFeatures:
     
     def plot_feature_importance(self, model, X, y, feature_names=None, top_n=20):
         """
-        Grafica la importancia de las características para un modelo y genera JSON con correlaciones
+        Calcula la importancia de las características para un modelo y genera JSON con correlaciones
+        sin visualizaciones gráficas
         
         Args:
             model: Modelo entrenado (debe tener atributo feature_importances_)
@@ -3167,18 +3168,6 @@ class TeamsFeatures:
             'Feature': feature_names,
             'Importance': importances
         }).sort_values('Importance', ascending=False)
-        
-        # Generar gráfico
-        plt.figure(figsize=(12, 8))
-        sns.barplot(x='Importance', y='Feature', data=importance_df.head(top_n))
-        plt.title(f'Top {top_n} Características por Importancia')
-        plt.tight_layout()
-        
-        # Guardar gráfico como imagen
-        plot_path = f"feature_importance_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png"
-        plt.savefig(plot_path, dpi=300, bbox_inches='tight')
-        plt.close()
-        logger.info(f"Gráfico de importancia guardado en {plot_path}")
         
         # Calcular y guardar correlaciones
         try:
@@ -3421,3 +3410,4 @@ class TeamsFeatures:
                 
             self.teams_data[mean_col] = default_value
             return win_rate_col, mean_col
+

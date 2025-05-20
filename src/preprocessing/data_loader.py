@@ -13,6 +13,7 @@ import warnings
 from src.preprocessing.results_parser.player_parser import ResultParser
 from src.preprocessing.results_parser.teams_parser import TeamsParser
 import logging
+from src.preprocessing.utils.double_double import calculate_double_triple_doubles
 
 logger = logging.getLogger(__name__)
 
@@ -142,12 +143,12 @@ class NBADataLoader:
         
         # Parsear resultados
         df = self.result_parser.parse_dataframe(df)
-        
+
         # Calcular is_home basado en Away
         # Away es '@' cuando es visitante, '' cuando es local
         df['is_home'] = (df['Away'] != '@').astype(int)
 
-        # Calcular is_started en base a GS
+        # Calcular is_started basado en GS
         # GS es '*' cuando es titular, '' cuando no es titular
         # Verificar valores únicos en GS para diagnóstico
         unique_gs_values = df['GS'].unique()
@@ -166,6 +167,9 @@ class NBADataLoader:
         
         # Ordenar por jugador y fecha
         df = df.sort_values(['Player', 'Date'])
+        
+        # Calcular doble-dobles y triple-dobles
+        df = calculate_double_triple_doubles(df)
         
         return df
     

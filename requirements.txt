@@ -8,3 +8,4 @@ matplotlib>=3.4.2
 seaborn>=0.11.1
 tqdm>=4.61.2 
 PyWavelets
+requests>=2.25.0

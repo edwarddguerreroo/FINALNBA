@@ -16,6 +16,7 @@ from datetime import datetime, timedelta
 import statsmodels.api as sm
 from scipy import stats
 from itertools import combinations
+from typing import List, Dict, Optional
 
 
 # Configuración del sistema de logging
@@ -225,9 +226,6 @@ class PlayersFeatures:
             # Crear características para líneas de apuestas
             self._create_betting_line_features()
             
-            # Crear características para doble-doble y triple-doble
-            self._create_double_triple_features()
-            
             # Crear características de matchup para jugadores
             self._create_matchup_features()
             
@@ -331,9 +329,10 @@ class PlayersFeatures:
                 'Player', 'Date', 'Team', 'Away', 'Opp', 'Result', 'GS', 'MP',
                 'FG', 'FGA', 'FG%', '2P', '2PA', '2P%', '3P', '3PA', '3P%',
                 'FT', 'FTA', 'FT%', 'TS%', 'ORB', 'DRB', 'TRB', 'AST', 'STL',
-                'BLK', 'TOV', 'PF', 'PTS', 'GmSc', 'BPM', '+/-', 'Pos', 'is_win',
+                'BLK', 'TOV', 'PF', 'PTS', 'GmSc', 'BPM', '+/-', 'Pos',
                 'team_score', 'opp_score', 'total_score', 'point_diff', 'has_overtime',
-                'overtime_periods', 'is_home', 'Height_Inches', 'Weight', 'BMI', 'is_started'
+                'overtime_periods', 'is_home', 'is_started', 'Height_Inches', 'Weight', 'BMI',
+                'double_double', 'triple_double'    
             ]
             
             # Filtrar las columnas base que existen en el DataFrame
@@ -751,7 +750,8 @@ class PlayersFeatures:
     
     def plot_feature_importance(self, model, X, y, feature_names=None, top_n=20):
         """
-        Grafica la importancia de las características para un modelo y genera JSON con correlaciones
+        Calcula la importancia de las características para un modelo y genera JSON con correlaciones
+        sin visualizaciones gráficas
         
         Args:
             model: Modelo entrenado (debe tener atributo feature_importances_)
@@ -781,18 +781,6 @@ class PlayersFeatures:
             'Feature': feature_names,
             'Importance': importances
         }).sort_values('Importance', ascending=False)
-        
-        # Generar gráfico
-        plt.figure(figsize=(12, 8))
-        sns.barplot(x='Importance', y='Feature', data=importance_df.head(top_n))
-        plt.title(f'Top {top_n} Características por Importancia')
-        plt.tight_layout()
-        
-        # Guardar gráfico como imagen
-        plot_path = f"player_feature_importance_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png"
-        plt.savefig(plot_path, dpi=300, bbox_inches='tight')
-        plt.close()
-        logger.info(f"Gráfico de importancia guardado en {plot_path}")
         
         # Calcular y guardar correlaciones
         try:
@@ -1341,457 +1329,175 @@ class PlayersFeatures:
     
     def _create_betting_line_features(self):
         """
-        Crea características específicas para líneas de apuestas
+        Crea características específicas para líneas de apuestas según historial
         """
         logger.info("Creando características para líneas de apuestas")
         
         try:
-
-            # Validar existencia de columnas de medias y desviaciones antes de procesar
-            required_cols = {}
-            for stat in self.betting_lines.keys():
-                if stat in ['Double_Double', 'Triple_Double']:
-                    col_name = stat.lower()
-                    # Omitir validación de Double_Double y Triple_Double aquí
-                    # Se manejarán específicamente en _create_double_triple_features
-                    continue
-                else:
-                    col_name = stat
-                
-                if col_name not in self.players_data.columns:
-                    logger.warning(f"La columna {col_name} no existe en el DataFrame, omitiendo líneas de apuesta")
-                    continue
-                
-                required_cols[stat] = []
-                for window in self.window_sizes:
-                    mean_col = f'{col_name}_mean_{window}'
-                    std_col = f'{col_name}_std_{window}'
-                    if mean_col in self.players_data.columns and std_col in self.players_data.columns:
-                        required_cols[stat].append(window)
-                    else:
-                        logger.warning(f"Columnas {mean_col} o {std_col} no existen, omitiendo ventana {window} para {stat}")
-
-
-            # Diccionario para almacenar todas las nuevas características
-            new_features = {}
+            # Verificar si tenemos las columnas de estadísticas básicas
+            required_stats = ['PTS', 'TRB', 'AST', '3P']
+            available_stats = [stat for stat in required_stats if stat in self.players_data.columns]
             
-            # Procesar cada línea de apuesta para cada estadística
-            for stat, thresholds in self.betting_lines.items():
-                # Omitir Double_Double y Triple_Double aquí, se manejan por separado
-                if stat in ['Double_Double', 'Triple_Double']:
-                    continue
-                    
-                if stat not in self.players_data.columns:
-                    logger.warning(f"La columna {stat} no existe en el DataFrame, omitiendo líneas de apuesta")
+            if not available_stats:
+                logger.error("No se encontraron estadísticas básicas para crear características de líneas")
+                return
+            
+            # Procesar cada jugador individualmente
+            for player in self.players_data['Player'].unique():
+                player_mask = self.players_data['Player'] == player
+                player_data = self.players_data[player_mask].sort_values('Date')
+                
+                # Solo procesar si hay suficientes partidos
+                if len(player_data) < 5:
                     continue
                 
-                # Para cada umbral, calcular la probabilidad histórica de superarlo
-                for threshold in thresholds:
-                    # Crear la característica binaria
-                    over_col = f'{stat}_over_{threshold}'
-                    self.players_data[over_col] = (self.players_data[stat] > threshold).astype(int)
-                    
-                    # Para cada ventana, calcular la tasa de superación móvil
-                    for window in self.window_sizes:
-                        # Verificar si ya tenemos las medias
-                        if f'{stat}_mean_{window}' in self.players_data.columns:
-                            # Crear un DataFrame temporal para los cálculos
-                            temp_df = pd.DataFrame({
-                                'Player': self.players_data['Player'],
-                                'mean': self.players_data[f'{stat}_mean_{window}']
-                            })
-                            
-                            # Calcular la diferencia con la línea
-                            temp_df['line_diff'] = temp_df['mean'] - threshold
-                            
-                            # Guardar la diferencia
-                            self.players_data[f'{stat}_line_diff_{threshold}_{window}'] = temp_df['line_diff'].values
-                            
-                            # Probabilidad de superar la línea
-                            self.players_data[f'{stat}_prob_over_{threshold}_{window}'] = (temp_df['line_diff'] > 0).astype(float).values
-                            
-                            # Calcular estadísticas por jugador
-                            grouped = temp_df.groupby('Player')['line_diff']
-                            
-                            # Volatilidad con manejo robusto de valores
-                            try:
-                                # Convertir a numérico y aplicar rolling std de forma segura
-                                volatility = grouped.transform(
-                                    lambda x: pd.to_numeric(x, errors='coerce')
-                                          .replace([np.inf, -np.inf], np.nan)
-                                          .fillna(0)
-                                          .rolling(window=min(window, len(x)), min_periods=1)
-                                          .std()
-                                          .replace([np.inf, -np.inf], np.nan)
-                                          .fillna(0)
-                                )
-                                
-                                # Limitar a rango razonable según la estadística
-                                if stat == 'PTS':
-                                    volatility = volatility.clip(0, 15)
-                                elif stat in ['TRB', 'AST']:
-                                    volatility = volatility.clip(0, 8)
-                                elif stat == '3P':
-                                    volatility = volatility.clip(0, 5)
-                                else:
-                                    volatility = volatility.clip(0, 10)
-                                    
-                                self.players_data[f'{stat}_line_volatility_{threshold}_{window}'] = volatility.values
-                            except Exception as e:
-                                logger.error(f"Error al calcular {stat}_line_volatility_{threshold}_{window}: {str(e)}")
-                                # Valor por defecto en caso de error
-                                self.players_data[f'{stat}_line_volatility_{threshold}_{window}'] = np.zeros(len(self.players_data))
-                            
-                            # Consistencia para superar la línea
-                            try:
-                                # Calcular tasa de superación de forma segura
-                                over_rates = self.players_data.groupby('Player')[over_col].transform(
-                                    lambda x: pd.to_numeric(x, errors='coerce')
-                                          .replace([np.inf, -np.inf], np.nan)
-                                          .fillna(0)
-                                          .rolling(window=min(window, len(x)), min_periods=1)
-                                          .mean()
-                                          .replace([np.inf, -np.inf], np.nan)
-                                          .fillna(0.5)
-                                )
-                                
-                                # Calcular consistencia (qué tan constante es la tasa)
-                                over_std = self.players_data.groupby('Player')[over_col].transform(
-                                    lambda x: pd.to_numeric(x, errors='coerce')
-                                          .replace([np.inf, -np.inf], np.nan)
-                                          .fillna(0)
-                                          .rolling(window=min(window, len(x)), min_periods=1)
-                                          .std()
-                                          .replace([np.inf, -np.inf], np.nan)
-                                          .fillna(0)
-                                )
-                                
-                                # Una baja desviación estándar significa alta consistencia
-                                consistency = 1 - over_std.clip(0, 1)
-                                
-                                self.players_data[f'{stat}_line_consistency_{threshold}_{window}'] = consistency
-                                self.players_data[f'{stat}_over_rate_{threshold}_{window}'] = over_rates
-                                
-                            except Exception as e:
-                                logger.error(f"Error al calcular consistencia para {stat}_line_{threshold}_{window}: {str(e)}")
-                                # Valores por defecto en caso de error
-                                self.players_data[f'{stat}_line_consistency_{threshold}_{window}'] = 0.5
-                                self.players_data[f'{stat}_over_rate_{threshold}_{window}'] = 0.5
-                            
-                            # Rachas para superar la línea
-                            try:
-                                for player in self.players_data['Player'].unique():
-                                    player_mask = self.players_data['Player'] == player
-                                    player_data = self.players_data.loc[player_mask].sort_values('Date').copy()
-                                    
-                                    # Inicializar rachas
-                                    streaks = []
-                                    current_streak = 0
-                                    
-                                    # Calcular racha para cada partido
-                                    for over in player_data[over_col]:
-                                        if over == 1:
-                                            current_streak += 1
-                                        else:
-                                            current_streak = 0
-                                        streaks.append(current_streak)
-                                    
-                                    # Asignar rachas al DataFrame
-                                    self.players_data.loc[player_data.index, f'{stat}_over_streak_{threshold}'] = streaks
-                            except Exception as e:
-                                logger.error(f"Error al calcular rachas para {stat}_over_{threshold}: {str(e)}")
-                                # Valor por defecto en caso de error
-                                self.players_data[f'{stat}_over_streak_{threshold}'] = 0
-                    
-                    try:
-                        if stat in self.players_data.columns:
-                            # Calcular margen sobre la línea, normalizado por la desviación estándar
-                            for window in self.window_sizes:
-                                stat_mean_col = f'{stat}_mean_{window}'
-                                stat_std_col = f'{stat}_std_{window}'
-                                
-                                if stat_mean_col in self.players_data.columns and stat_std_col in self.players_data.columns:
-                                    # Calcular z-score respecto a la línea de forma segura
-                                    # Primero convertir a valores numéricos y eliminar valores problemáticos
-                                    means = pd.to_numeric(self.players_data[stat_mean_col], errors='coerce')
-                                    stds = pd.to_numeric(self.players_data[stat_std_col], errors='coerce')
-                                    
-                                    # Reemplazar valores problemáticos
-                                    means = means.replace([np.inf, -np.inf], np.nan).fillna(threshold)
-                                    # Aumentamos el valor mínimo de std para evitar divisiones por valores muy pequeños
-                                    stds = stds.replace([np.inf, -np.inf], np.nan).fillna(1.0).clip(lower=1.0)
-                                    
-                                    # Asegurar que el denominador no sea demasiado pequeño
-                                    # Cálculo de edge de forma segura
-                                    with np.errstate(divide='ignore', invalid='ignore'):
-                                        edge_raw = (means - threshold) / stds
-                                    
-                                    # Reemplazar valores inválidos manualmente
-                                    edge = np.where(np.isfinite(edge_raw), edge_raw, 0)
-                                    edge = np.clip(edge, -5, 5)
-                                    
-                                    # Asignar al DataFrame
-                                    self.players_data[f'{stat}_edge_{threshold}_{window}'] = edge
-                    except Exception as e:
-                        logger.error(f"Error al calcular edge para {stat}_{threshold}: {str(e)}")
-                        logger.error(traceback.format_exc())
-                    
-                    # 2. Características situacionales (casa/visitante, victoria/derrota)
-                    try:
-                        # Rendimiento sobre la línea en casa vs visitante
-                        if 'is_home' in self.players_data.columns:
-                            for player in self.players_data['Player'].unique():
-                                player_mask = self.players_data['Player'] == player
-                                
-                                # Filtrar partidos en casa y fuera
-                                home_mask = player_mask & (self.players_data['is_home'] == True)
-                                away_mask = player_mask & (self.players_data['is_home'] == False)
-                                
-                                if home_mask.sum() >= 3 and away_mask.sum() >= 3:
-                                    # Calcular tasa de superación en casa (con manejo seguro de valores)
-                                    home_over_rate = self.players_data.loc[home_mask, over_col].astype(float).mean()
-                                    if not np.isfinite(home_over_rate):
-                                        home_over_rate = 0.5
-                                        
-                                    # Calcular tasa de superación fuera (con manejo seguro de valores)
-                                    away_over_rate = self.players_data.loc[away_mask, over_col].astype(float).mean()
-                                    if not np.isfinite(away_over_rate):
-                                        away_over_rate = 0.5
-                                    
-                                    # Asignar a todos los partidos del jugador
-                                    self.players_data.loc[player_mask, f'{stat}_home_over_rate_{threshold}'] = home_over_rate
-                                    self.players_data.loc[player_mask, f'{stat}_away_over_rate_{threshold}'] = away_over_rate
-                                    
-                                    # Calcular la diferencia de forma segura
-                                    home_away_diff = home_over_rate - away_over_rate
-                                    self.players_data.loc[player_mask, f'{stat}_home_away_diff_{threshold}'] = home_away_diff
+                # Para cada tipo de estadística
+                for stat in available_stats:
+                    # Excluir Double_Double y Triple_Double
+                    if stat in ['Double_Double', 'Triple_Double']:
+                        continue
                         
-                        # Rendimiento sobre la línea en victorias vs derrotas
-                        if 'is_win' in self.players_data.columns:
-                            for player in self.players_data['Player'].unique():
-                                player_mask = self.players_data['Player'] == player
-                                
-                                # Filtrar victorias y derrotas
-                                win_mask = player_mask & (self.players_data['is_win'] == True)
-                                loss_mask = player_mask & (self.players_data['is_win'] == False)
-                                
-                                if win_mask.sum() >= 3 and loss_mask.sum() >= 3:
-                                    # Calcular tasa de superación en victorias
-                                    win_over_rate = self.players_data.loc[win_mask, over_col].astype(float).mean()
-                                    if not np.isfinite(win_over_rate):
-                                        win_over_rate = 0.5
-                                    
-                                    # Calcular tasa de superación en derrotas
-                                    loss_over_rate = self.players_data.loc[loss_mask, over_col].astype(float).mean()
-                                    if not np.isfinite(loss_over_rate):
-                                        loss_over_rate = 0.5
-                                    
-                                    # Asignar a todos los partidos del jugador
-                                    self.players_data.loc[player_mask, f'{stat}_win_over_rate_{threshold}'] = win_over_rate
-                                    self.players_data.loc[player_mask, f'{stat}_loss_over_rate_{threshold}'] = loss_over_rate
-                                    
-                                    # Diferencia
-                                    win_loss_diff = win_over_rate - loss_over_rate
-                                    self.players_data.loc[player_mask, f'{stat}_win_loss_diff_{threshold}'] = win_loss_diff
-                    except Exception as e:
-                        logger.error(f"Error al calcular características situacionales para {stat}_{threshold}: {str(e)}")
-                        logger.error(traceback.format_exc())
-            
-            # 3. Doble-Doble y Triple-Doble
-            for stat in ['Double_Double', 'Triple_Double']:
-                if stat in self.betting_lines:
-                    thresholds = self.betting_lines[stat]
+                    if stat not in self.betting_lines:
+                        continue
                     
-                    # Usar la columna correspondiente
-                    col_name = stat.lower()
-                    if col_name in self.players_data.columns:
-                        for threshold in thresholds:
-                            # Crear variable sobre umbral
-                            over_col = f'{col_name}_over_{threshold}'
-                            self.players_data[over_col] = (self.players_data[col_name] > threshold).astype(int)
+                    # Para cada línea de apuesta disponible
+                    for line in self.betting_lines[stat]:
+                        # Crear variables con rate de superar la línea para diferentes ventanas
+                        for window in self.window_sizes:
+                            col_name = f'{stat}_over_{line}_rate_{window}'
                             
-                            # Calcular tasa de logro para diferentes ventanas
-                            for window in self.window_sizes:
-                                # Usar la función safe_rolling para el cálculo
-                                self.players_data[f'{col_name}_rate_{window}'] = self.players_data.groupby('Player')[col_name].transform(
-                                    lambda x: self._safe_rolling(x, window=window, operation='mean', min_periods=1)
-                                )
+                            # Inicializar columna si no existe
+                            if col_name not in self.players_data.columns:
+                                self.players_data[col_name] = 0
+                            
+                            # Para cada fecha, calcular el rate de los últimos 'window' partidos
+                            for i in range(len(player_data)):
+                                if i < window:
+                                    # Si no hay suficientes partidos previos, usar todos los disponibles
+                                    prev_games = player_data.iloc[:i+1]
+                                else:
+                                    # Usar los últimos 'window' partidos
+                                    prev_games = player_data.iloc[i-window+1:i+1]
+                                
+                                if len(prev_games) > 0:
+                                    # Calcular tasa de superar la línea
+                                    over_rate = (prev_games[stat] > line).mean()
+                                    
+                                    # Asignar al registro actual
+                                    idx = player_data.index[i]
+                                    self.players_data.loc[idx, col_name] = over_rate
+                        
+                        # Crear streaks actuales por encima/debajo de la línea
+                        over_streak_col = f'{stat}_over_{line}_streak'
+                        under_streak_col = f'{stat}_under_{line}_streak'
+                        
+                        # Inicializar columnas si no existen
+                        if over_streak_col not in self.players_data.columns:
+                            self.players_data[over_streak_col] = 0
+                        if under_streak_col not in self.players_data.columns:
+                            self.players_data[under_streak_col] = 0
+                        
+                        # Calcular streaks
+                        current_over_streak = 0
+                        current_under_streak = 0
+                        
+                        for i, (idx, row) in enumerate(player_data.iterrows()):
+                            if row[stat] > line:
+                                current_over_streak += 1
+                                current_under_streak = 0
+                            else:
+                                current_under_streak += 1
+                                current_over_streak = 0
+                            
+                            self.players_data.loc[idx, over_streak_col] = current_over_streak
+                            self.players_data.loc[idx, under_streak_col] = current_under_streak
+                        
+                        # Calcular consistencia en superar/no superar la línea
+                        consistency_col = f'{stat}_line_{line}_consistency'
+                        
+                        if consistency_col not in self.players_data.columns:
+                            self.players_data[consistency_col] = 0
+                        
+                        for window in [10, 20]:
+                            if len(player_data) >= window:
+                                for i in range(window, len(player_data) + 1):
+                                    # Obtener los últimos 'window' partidos
+                                    last_n_games = player_data.iloc[i-window:i]
+                                    
+                                    # Calcular qué tan consistente es el jugador respecto a la línea
+                                    over_ratio = (last_n_games[stat] > line).mean()
+                                    
+                                    # La consistencia es alta si el ratio está cerca de 0 o 1
+                                    # Usamos la función 2*|x-0.5| que mapea [0,1] a [0,1] con máximo en 0 y 1
+                                    consistency = 2 * abs(over_ratio - 0.5)
+                                    
+                                    # Asignar al último juego de la ventana
+                                    if i < len(player_data):
+                                        idx = player_data.index[i]
+                                        self.players_data.loc[idx, f'{consistency_col}_{window}'] = consistency
+            
+            # Identificar líneas de mayor valor para cada jugador
+            for stat in available_stats:
+                if stat in ['Double_Double', 'Triple_Double']:
+                    continue
+                    
+                if stat not in self.betting_lines:
+                    continue
+                
+                best_line_col = f'{stat}_best_line'
+                best_side_col = f'{stat}_best_side'
+                best_value_col = f'{stat}_line_value'
+                
+                self.players_data[best_line_col] = 0
+                self.players_data[best_side_col] = 'none'
+                self.players_data[best_value_col] = 0
+                
+                for player in self.players_data['Player'].unique():
+                    player_mask = self.players_data['Player'] == player
+                    player_data = self.players_data[player_mask].sort_values('Date')
+                    
+                    if len(player_data) < 10:
+                        continue
+                    
+                    # Para cada fecha, evaluar todas las líneas
+                    for i in range(10, len(player_data)):
+                        prior_games = player_data.iloc[:i]
+                        current_idx = player_data.index[i]
+                        
+                        best_ev = 0
+                        best_line = 0
+                        best_side = 'none'
+                        
+                        for line in self.betting_lines[stat]:
+                            # Calcular expectativa over/under con los partidos previos
+                            over_prob = (prior_games[stat] > line).mean()
+                            under_prob = 1 - over_prob
+                            
+                            # Calcular valor esperado (EV) asumiendo pago estándar -110 (1.91)
+                            # EV = (probabilidad_win * pago) - (probabilidad_loss)
+                            over_ev = (over_prob * 1.91) - under_prob
+                            under_ev = (under_prob * 1.91) - over_prob
+                            
+                            # Determinar mejor apuesta (la de mayor EV positivo)
+                            if over_ev > best_ev and over_ev > 0:
+                                best_ev = over_ev
+                                best_line = line
+                                best_side = 'over'
+                            elif under_ev > best_ev and under_ev > 0:
+                                best_ev = under_ev
+                                best_line = line
+                                best_side = 'under'
+                        
+                        # Guardar la mejor línea para este partido
+                        self.players_data.loc[current_idx, best_line_col] = best_line
+                        self.players_data.loc[current_idx, best_side_col] = best_side
+                        self.players_data.loc[current_idx, best_value_col] = best_ev
             
             logger.info("Características para líneas de apuestas creadas correctamente")
             
         except Exception as e:
             logger.error(f"Error al crear características para líneas de apuestas: {str(e)}")
             logger.error(traceback.format_exc())
-        
-        return self.players_data
-    
-    def _create_double_triple_features(self):
-        """
-        Crea características DERIVADAS para predicciones de doble-doble y triple-doble.
-        """
-        logger.info("Creando características derivadas para doble-doble y triple-doble")
-        
-        try:
-            # 1. Calcular dobles y triples dobles base
-            stats_for_double = ['PTS', 'TRB', 'AST', 'STL', 'BLK']
-            available_stats = [stat for stat in stats_for_double if stat in self.players_data.columns]
-            
-            # Asegurar que las estadísticas base sean numéricas
-            for stat in available_stats:
-                self.players_data[stat] = pd.to_numeric(self.players_data[stat], errors='coerce').fillna(0)
-            
-            # Crear columnas X_double
-            for stat in available_stats:
-                x_double_col = f'{stat}_double'
-                self.players_data[x_double_col] = (self.players_data[stat] >= 10).astype(int)
-                logger.info(f"Columna {x_double_col} creada")
-            
-            # Calcular double_double y triple_double
-            double_cols = [f'{stat}_double' for stat in available_stats]
-            self.players_data['double_double'] = (self.players_data[double_cols].sum(axis=1) >= 2).astype(int)
-            self.players_data['triple_double'] = (self.players_data[double_cols].sum(axis=1) >= 3).astype(int)
-            
-            # Verificación y logging inicial
-            dd_count = self.players_data['double_double'].sum()
-            td_count = self.players_data['triple_double'].sum()
-            logger.info(f"Se identificaron {dd_count} doble-dobles y {td_count} triple-dobles")
-            
-            # Verificar casos con PTS=0
-            zero_pts_dd = self.players_data[(self.players_data['PTS'] < 1) & (self.players_data['double_double'] == 1)]
-            if not zero_pts_dd.empty:
-                logger.info(f"VALIDACIÓN: Hay {len(zero_pts_dd)} doble-dobles sin puntos (legítimos)")
-            
-            # 2. Cálculo de tendencias temporales (tasas, medias, desviaciones)
-            # Características para doble-doble
-            for window in self.window_sizes:
-                try:
-                    # Tasa de doble-doble por jugador a lo largo del tiempo
-                    self.players_data[f'double_double_rate_{window}'] = self.players_data.groupby('Player')['double_double'].transform(
-                        lambda x: pd.to_numeric(x, errors='coerce')
-                                .rolling(window=min(window, len(x)), min_periods=1)
-                                .mean()
-                                .fillna(0)
-                    )
-                    
-                    # Media móvil para double_double
-                    if f'double_double_mean_{window}' not in self.players_data.columns:
-                        self.players_data[f'double_double_mean_{window}'] = self.players_data[f'double_double_rate_{window}']
-                    
-                    # Desviación estándar móvil para double_double
-                    if f'double_double_std_{window}' not in self.players_data.columns:
-                        self.players_data[f'double_double_std_{window}'] = self.players_data.groupby('Player')['double_double'].transform(
-                            lambda x: pd.to_numeric(x, errors='coerce')
-                                    .rolling(window=min(window, len(x)), min_periods=1)
-                                    .std()
-                                    .fillna(0)
-                        )
-                    
-                    # 3. Rachas de doble-dobles
-                    for player in self.players_data['Player'].unique():
-                        player_mask = self.players_data['Player'] == player
-                        player_data = self.players_data.loc[player_mask].sort_values('Date').copy()
-                        streaks = []
-                        current_streak = 0
-                        for dd in player_data['double_double']:
-                            if dd == 1:
-                                current_streak += 1
-                            else:
-                                current_streak = 0
-                            streaks.append(current_streak)
-                        self.players_data.loc[player_data.index, 'double_double_streak'] = streaks
-                        
-                    # 4. Características de triple-doble similares
-                    self.players_data[f'triple_double_rate_{window}'] = self.players_data.groupby('Player')['triple_double'].transform(
-                        lambda x: pd.to_numeric(x, errors='coerce')
-                                .rolling(window=min(window, len(x)), min_periods=1)
-                                .mean()
-                                .fillna(0)
-                    )
-                    
-                    if f'triple_double_mean_{window}' not in self.players_data.columns:
-                        self.players_data[f'triple_double_mean_{window}'] = self.players_data[f'triple_double_rate_{window}']
-                    
-                    if f'triple_double_std_{window}' not in self.players_data.columns:
-                        self.players_data[f'triple_double_std_{window}'] = self.players_data.groupby('Player')['triple_double'].transform(
-                            lambda x: pd.to_numeric(x, errors='coerce')
-                                    .rolling(window=min(window, len(x)), min_periods=1)
-                                    .std()
-                                    .fillna(0)
-                        )
-                    
-                    # Rachas de triple-dobles
-                    for player in self.players_data['Player'].unique():
-                        player_mask = self.players_data['Player'] == player
-                        player_data = self.players_data.loc[player_mask].sort_values('Date').copy()
-                        streaks = []
-                        current_streak = 0
-                        for td in player_data['triple_double']:
-                            if td == 1:
-                                current_streak += 1
-                            else:
-                                current_streak = 0
-                            streaks.append(current_streak)
-                        self.players_data.loc[player_data.index, 'triple_double_streak'] = streaks
-                    
-                except Exception as e:
-                    logger.error(f"Error al calcular características derivadas con ventana {window}: {str(e)}")
-            
-            # 5. Características para pronósticos basados en umbrales de apuestas
-            for stat in ['Double_Double', 'Triple_Double']:
-                col_name = stat.lower()
-                if col_name not in self.players_data.columns:
-                    continue
-                    
-                # Verificar si el stat existe en betting_lines
-                if stat not in self.betting_lines:
-                    continue
-                    
-                for threshold in self.betting_lines[stat]:
-                    try:
-                        # Columna sobre umbral (sin modificar las columnas base)
-                        over_col = f'{col_name}_over_{threshold}'
-                        self.players_data[over_col] = (self.players_data[col_name] > threshold).astype(int)
-                        
-                        # Probabilidades por ventana
-                        for window in self.window_sizes:
-                            prob_col = f'{col_name}_prob_over_{threshold}_{window}'
-                            try:
-                                self.players_data[prob_col] = self.players_data.groupby('Player')[over_col].transform(
-                                    lambda x: pd.to_numeric(x, errors='coerce')
-                                            .rolling(window=min(window, len(x)), min_periods=1)
-                                            .mean()
-                                            .fillna(0)
-                                )
-                                
-                                # Tendencia respecto a ventanas más grandes
-                                if window < self.window_sizes[-1]:
-                                    next_window = next((w for w in self.window_sizes if w > window), None)
-                                    if next_window:
-                                        next_prob_col = f'{col_name}_prob_over_{threshold}_{next_window}'
-                                        
-                                        if next_prob_col in self.players_data.columns:
-                                            trend_col = f'{col_name}_trend_{threshold}_{window}'
-                                            self.players_data[trend_col] = (
-                                                self.players_data[prob_col] - 
-                                                self.players_data[next_prob_col]
-                                            ).clip(-1, 1).fillna(0)
-                            except Exception as e:
-                                logger.error(f"Error al calcular {prob_col}: {str(e)}")
-                    except Exception as e:
-                        logger.error(f"Error al crear características de pronóstico para {col_name}: {str(e)}")
-
-            # 6. Rellenar valores nulos en columnas derivadas
-            double_triple_cols = [col for col in self.players_data.columns 
-                                 if ('double' in col or 'triple' in col) and col not in ['double_double', 'triple_double']]
-            for col in double_triple_cols:
-                if self.players_data[col].isnull().any():
-                    self.players_data[col] = self.players_data[col].fillna(0)
-
-            logger.info("Características derivadas para doble-doble y triple-doble creadas correctamente")
-        
-        except Exception as e:
-            logger.error(f"Error al crear características derivadas: {str(e)}")
-            logger.error(f"Traza de error: {traceback.format_exc()}")
         
         return self.players_data
     
@@ -3574,3 +3280,4 @@ class PlayersFeatures:
             logger.error(traceback.format_exc())
         
         return self.players_data
+

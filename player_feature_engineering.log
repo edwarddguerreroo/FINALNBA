@@ -1,7 +1,0 @@
-2025-05-18 00:07:04,648 - PlayerFeatureEngineering - INFO - Iniciando proceso de ingeniería de características para jugadores
-2025-05-18 00:07:05,303 - PlayerFeatureEngineering - INFO - Generando características para 55764 registros
-2025-05-18 01:03:52,016 - PlayerFeatureEngineering - INFO - Validando características generadas
-2025-05-18 01:03:52,805 - PlayerFeatureEngineering - INFO - Características generadas: 1247
-2025-05-18 01:03:52,805 - PlayerFeatureEngineering - INFO - Registros finales: 55764
-2025-05-18 01:42:03,953 - PlayerFeatureEngineering - INFO - Características guardadas en data\processed\players_features.csv
-2025-05-18 01:42:04,501 - PlayerFeatureEngineering - INFO - Metadata guardada en data\processed\players_features_metadata.json
