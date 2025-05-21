@@ -291,14 +291,6 @@ class FeaturesSelector:
             '3P': [
                 '3P',  # El target mismo
                 '3P_over_1', '3P_over_2', '3P_over_3', '3P_over_4', '3P_over_5',
-            ],
-            'Double_Double': [
-                'double_double',  # El target mismo
-                'double_double_rate_10', 'double_double_streak',
-            ],
-            'Triple_Double': [
-                'triple_double',  # El target mismo
-                'triple_double_rate_10', 'triple_double_streak',
             ]
         }
 

@@ -1,3 +1,28 @@
+"""
+Módulo BookmakersIntegration
+---------------------------
+Este módulo proporciona la integración avanzada entre nuestros modelos predictivos
+y los datos de las casas de apuestas. Su propósito principal es:
+
+1. Conectar nuestras predicciones con las probabilidades implícitas del mercado
+   para identificar "value bets" (apuestas con ventaja estadística)
+
+2. Analizar líneas específicas donde nuestro modelo tiene alta precisión (≥96%)
+   y comparar con las odds ofrecidas por las casas de apuestas
+
+3. Identificar ineficiencias del mercado y oportunidades de arbitraje entre
+   diferentes casas de apuestas
+
+4. Analizar movimientos de líneas para detectar tendencias y patrones
+
+5. Generar estrategias óptimas de apuestas aplicando variantes del criterio
+   de Kelly para la asignación de capital
+
+Este módulo representa la capa de análisis avanzado que convierte las predicciones
+en estrategias concretas de apuestas, determinando dónde existe ventaja estadística
+sobre el mercado.
+"""
+
 import pandas as pd
 import numpy as np
 import logging
@@ -40,6 +65,17 @@ class BookmakersIntegration:
     ) -> Tuple[pd.DataFrame, Dict[str, Any]]:
         """
         Procesa datos de jugadores incorporando odds de casas de apuestas
+        
+        Este método principal:
+        1. Orquesta el proceso completo de análisis de casas de apuestas
+        2. Obtiene datos de odds (API, archivo o simulados)
+        3. Integra estos datos con las predicciones del modelo
+        4. Ejecuta múltiples análisis avanzados:
+           - Líneas de alta confianza
+           - Ineficiencias de mercado
+           - Oportunidades de arbitraje
+           - Movimientos de líneas
+        5. Genera una estrategia óptima de apuestas
         
         Args:
             player_data: DataFrame con datos de jugadores
@@ -187,6 +223,13 @@ class BookmakersIntegration:
     ) -> List[Dict[str, Any]]:
         """
         Devuelve las mejores apuestas de valor basadas en el análisis previo
+        
+        Este método:
+        1. Filtra las apuestas con mayor ventaja estadística
+        2. Prioriza líneas donde el modelo tiene mayor confianza
+        3. Ordena resultados por valor esperado (EV) descendente
+        4. Aplica criterios mínimos de confianza y ventaja (edge)
+        5. Proporciona un listado ejecutable de las mejores oportunidades
         
         Args:
             target: Estadística específica (si None, busca en todas)
@@ -456,17 +499,23 @@ class BookmakersIntegration:
         min_edge: float = 0.04
     ) -> Dict[str, Any]:
         """
-        Genera una cartera óptima de apuestas utilizando el criterio de Kelly
-        para maximizar el crecimiento del bankroll a largo plazo
+        Genera un portafolio de apuestas optimizado según criterio Kelly
+        
+        Este método avanzado:
+        1. Aplica una versión modificada del criterio Kelly para optimizar apuestas
+        2. Distribuye el capital disponible entre múltiples oportunidades 
+        3. Limita el riesgo total del portafolio según parámetros configurables
+        4. Pondera apuestas según nivel de confianza y ventaja sobre el mercado
+        5. Maximiza el crecimiento esperado del capital a largo plazo
         
         Args:
             player_data: DataFrame con datos de jugadores
-            min_confidence: Confianza mínima para incluir una apuesta (default: 96%)
-            max_portfolio_risk: Riesgo máximo total de la cartera (como fracción del bankroll)
-            min_edge: Ventaja mínima sobre las casas
+            min_confidence: Confianza mínima requerida (0.96 = 96%)
+            max_portfolio_risk: Riesgo máximo del portafolio (0.25 = 25%)
+            min_edge: Ventaja mínima sobre casas de apuestas
             
         Returns:
-            Cartera optimizada de apuestas
+            Diccionario con estrategia de portafolio optimizada
         """
         # Estadísticas a analizar
         targets = ['PTS', 'TRB', 'AST', '3P']
