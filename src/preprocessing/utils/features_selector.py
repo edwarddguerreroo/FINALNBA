@@ -600,39 +600,32 @@ class FeaturesSelector:
                         if isinstance(filtered_correlations, pd.Series):
                             high_corr_features = filtered_correlations.sort_values(ascending=False)
                         else:  # Es DataFrame
-                            # Si es DataFrame, verificar columnas duplicadas
-                            if filtered_correlations.columns.duplicated().any():
-                                duplicated_cols = [col for col in filtered_correlations.columns[filtered_correlations.columns.duplicated()]]
+                            # Verificar si hay columnas duplicadas
+                            duplicated_cols = filtered_correlations.columns[filtered_correlations.columns.duplicated()]
+                            if len(duplicated_cols) > 0:
                                 logger.warning(f"Se detectaron columnas duplicadas: {duplicated_cols}")
-                                
-                                # Eliminar columnas duplicadas
-                                unique_cols = ~filtered_correlations.columns.duplicated(keep='first')
-                                filtered_correlations = filtered_correlations.loc[:, unique_cols]
-                                
-                                if not filtered_correlations.empty and len(filtered_correlations.columns) > 0:
-                                    high_corr_features = filtered_correlations.sort_values(by=filtered_correlations.columns[0], ascending=False)
-                                else:
-                                    logger.warning("No quedan columnas después de eliminar duplicados, usando características originales")
-                                    high_corr_features = pd.Series([], dtype='float64')
-                            else:
-                                high_corr_features = filtered_correlations.sort_values(by=filtered_correlations.columns[0], ascending=False)
-                        
-                        # Convertir a lista de nombres de características
-                        if isinstance(high_corr_features, pd.Series):
-                            high_corr_features = high_corr_features.index.tolist()
-                        else:
-                            high_corr_features = high_corr_features.index.tolist()
+                                # Usar la primera columna para ordenar (o eliminar duplicados)
+                                filtered_correlations = filtered_correlations.loc[:, ~filtered_correlations.columns.duplicated()]
                             
-                    except Exception as sort_error:
-                        logger.warning(f"Error al ordenar features: {sort_error}. Usando orden original.")
-                        # En caso de error, intentar obtener los índices directamente
+                            # Ordenar usando la primera columna del DataFrame
+                            try:
+                                high_corr_features = filtered_correlations.sort_values(by=filtered_correlations.columns[0], ascending=False)
+                            except Exception as sort_err:
+                                logger.warning(f"Error al ordenar correlaciones en DataFrame: {sort_err}")
+                                # Convertir a Series como fallback
+                                if len(filtered_correlations.columns) > 0:
+                                    high_corr_features = pd.Series(filtered_correlations.iloc[:, 0], index=filtered_correlations.index)
+                                else:
+                                    high_corr_features = pd.Series([], dtype='float64')
+                        
+                        high_corr_features = high_corr_features.index.tolist()
+                    except Exception as e:
+                        logger.error(f"Error al ordenar correlaciones: {str(e)}")
+                        # En caso de error, usar las características sin ordenar
                         try:
-                            if isinstance(filtered_correlations, pd.Series):
-                                high_corr_features = filtered_correlations.index.tolist()
-                            else:
-                                high_corr_features = filtered_correlations.index.tolist()
+                            high_corr_features = filtered_correlations.index.tolist()
                         except:
-                            # Si todo falla, usar las características disponibles
+                            logger.error("No se pudo obtener índice de correlaciones, usando características disponibles")
                             high_corr_features = available_features.copy()
                 else:
                     high_corr_features = []
@@ -669,9 +662,14 @@ class FeaturesSelector:
                                     # Verificar que todas las características existen en correlations
                                     valid_features = [f for f in existing_group if f in correlations.index]
                                     if valid_features:
-                                        # Obtener la característica con mayor correlación
-                                        best_feature = max(valid_features, key=lambda x: correlations[x])
-                                        high_precision_features.append(best_feature)
+                                        try:
+                                            # Obtener la característica con mayor correlación
+                                            best_feature = max(valid_features, key=lambda x: correlations[x])
+                                            high_precision_features.append(best_feature)
+                                        except Exception as max_err:
+                                            logger.warning(f"Error al encontrar la característica con mayor correlación: {max_err}")
+                                            # Usar la primera característica como fallback
+                                            high_precision_features.append(valid_features[0])
                             except Exception as group_err:
                                 logger.warning(f"Error procesando grupo de características {group}: {group_err}")
                         
@@ -1137,13 +1135,25 @@ class FeaturesSelector:
                             filtered_correlations = filtered_correlations.loc[:, ~filtered_correlations.columns.duplicated()]
                         
                         # Ordenar usando la primera columna del DataFrame
-                        high_corr_features = filtered_correlations.sort_values(by=filtered_correlations.columns[0], ascending=False)
+                        try:
+                            high_corr_features = filtered_correlations.sort_values(by=filtered_correlations.columns[0], ascending=False)
+                        except Exception as sort_err:
+                            logger.warning(f"Error al ordenar correlaciones en DataFrame: {sort_err}")
+                            # Convertir a Series como fallback
+                            if len(filtered_correlations.columns) > 0:
+                                high_corr_features = pd.Series(filtered_correlations.iloc[:, 0], index=filtered_correlations.index)
+                            else:
+                                high_corr_features = pd.Series([], dtype='float64')
                     
                     high_corr_features = high_corr_features.index.tolist()
                 except Exception as e:
                     logger.error(f"Error al ordenar correlaciones: {str(e)}")
                     # En caso de error, usar las características sin ordenar
-                    high_corr_features = filtered_correlations.index.tolist()
+                    try:
+                        high_corr_features = filtered_correlations.index.tolist()
+                    except:
+                        logger.error("No se pudo obtener índice de correlaciones, usando características disponibles")
+                        high_corr_features = available_features.copy()
                 else:
                     high_corr_features = []
             

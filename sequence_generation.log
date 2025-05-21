@@ -1,0 +1,34 @@
+2025-05-21 14:27:23,726 - SequenceGenerator - INFO - Cargando datos procesados para generar secuencias
+2025-05-21 14:27:23,727 - SequenceGenerator - INFO - Cargando datos de jugadores desde data\processed\players_features.csv
+2025-05-21 14:27:28,427 - SequenceGenerator - INFO - Cargando datos de equipos desde data\processed\teams_features.csv
+2025-05-21 14:27:28,944 - SequenceGenerator - INFO - Generando secuencias para targets de jugador
+2025-05-21 14:45:29,274 - SequenceGenerator - INFO - Secuencias de jugador generadas para 4 targets
+2025-05-21 14:45:29,275 - SequenceGenerator - INFO - Generando secuencias para targets de equipo
+2025-05-21 14:48:02,988 - SequenceGenerator - INFO - Secuencias de equipo generadas para 3 targets
+2025-05-21 14:48:02,988 - SequenceGenerator - INFO - 
+==================================================
+2025-05-21 14:48:02,988 - SequenceGenerator - INFO - RESUMEN DE SECUENCIAS GENERADAS
+2025-05-21 14:48:02,989 - SequenceGenerator - INFO - ==================================================
+2025-05-21 14:48:02,989 - SequenceGenerator - INFO - Target PTS: [OK]
+2025-05-21 14:48:02,989 - SequenceGenerator - INFO -   - Secuencias: data\sequences\player\pts\pts_predictor_PTS_sequences.npz
+2025-05-21 14:48:02,989 - SequenceGenerator - INFO -   - Mapeo: data\sequences\player\pts\pts_predictor_PTS_feature_mapping.json
+2025-05-21 14:48:02,989 - SequenceGenerator - INFO - Target TRB: [OK]
+2025-05-21 14:48:02,989 - SequenceGenerator - INFO -   - Secuencias: data\sequences\player\trb\trb_predictor_TRB_sequences.npz
+2025-05-21 14:48:02,989 - SequenceGenerator - INFO -   - Mapeo: data\sequences\player\trb\trb_predictor_TRB_feature_mapping.json
+2025-05-21 14:48:02,991 - SequenceGenerator - INFO - Target AST: [OK]
+2025-05-21 14:48:02,991 - SequenceGenerator - INFO -   - Secuencias: data\sequences\player\ast\ast_predictor_AST_sequences.npz
+2025-05-21 14:48:02,991 - SequenceGenerator - INFO -   - Mapeo: data\sequences\player\ast\ast_predictor_AST_feature_mapping.json
+2025-05-21 14:48:02,991 - SequenceGenerator - INFO - Target 3P: [OK]
+2025-05-21 14:48:02,991 - SequenceGenerator - INFO -   - Secuencias: data\sequences\player\3p\3p_predictor_3P_sequences.npz
+2025-05-21 14:48:02,991 - SequenceGenerator - INFO -   - Mapeo: data\sequences\player\3p\3p_predictor_3P_feature_mapping.json
+2025-05-21 14:48:02,991 - SequenceGenerator - INFO - Target Win: [OK]
+2025-05-21 14:48:02,992 - SequenceGenerator - INFO -   - Secuencias: data\sequences\team\win\win_predictor_Win_sequences.npz
+2025-05-21 14:48:02,992 - SequenceGenerator - INFO -   - Mapeo: data\sequences\team\win\win_predictor_Win_feature_mapping.json
+2025-05-21 14:48:02,992 - SequenceGenerator - INFO - Target Total_Points_Over_Under: [OK]
+2025-05-21 14:48:02,992 - SequenceGenerator - INFO -   - Secuencias: data\sequences\team\total_points_over_under\total_points_predictor_Total_Points_Over_Under_sequences.npz
+2025-05-21 14:48:02,992 - SequenceGenerator - INFO -   - Mapeo: data\sequences\team\total_points_over_under\total_points_predictor_Total_Points_Over_Under_feature_mapping.json
+2025-05-21 14:48:02,992 - SequenceGenerator - INFO - Target Team_Points_Over_Under: [OK]
+2025-05-21 14:48:02,992 - SequenceGenerator - INFO -   - Secuencias: data\sequences\team\team_points_over_under\team_points_predictor_Team_Points_Over_Under_sequences.npz
+2025-05-21 14:48:02,992 - SequenceGenerator - INFO -   - Mapeo: data\sequences\team\team_points_over_under\team_points_predictor_Team_Points_Over_Under_feature_mapping.json
+2025-05-21 14:48:02,993 - SequenceGenerator - INFO - 
+Procesados 7/7 targets exitosamente

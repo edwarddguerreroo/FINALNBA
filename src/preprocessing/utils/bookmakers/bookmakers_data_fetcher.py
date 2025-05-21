@@ -1,3 +1,25 @@
+"""
+Este módulo proporciona funcionalidades para obtener y procesar datos de odds (cuotas)
+de diferentes casas de apuestas. Su propósito principal es:
+
+1. Obtener datos de odds desde diferentes fuentes:
+   - APIs externas como The Odds API
+   - Archivos locales en varios formatos (CSV, JSON, Excel)
+
+2. Gestionar caché de datos para optimizar llamadas a API y reducir costos
+
+3. Estandarizar datos de diferentes fuentes en un formato común
+
+4. Integrar los datos de odds con nuestros DataFrames de jugadores/equipos
+
+5. Simular datos de odds cuando no hay datos reales disponibles (para pruebas)
+
+6. Comparar odds entre diferentes casas de apuestas para análisis de mercado
+
+Esta clase es utilizada por BookmakersIntegration para el análisis avanzado 
+de oportunidades de apuestas con alta confianza.
+"""
+
 import pandas as pd
 import numpy as np
 import requests
@@ -64,6 +86,11 @@ class BookmakersDataFetcher:
     ) -> Dict[str, Any]:
         """
         Carga odds desde un proveedor de API (The Odds API o similar)
+        
+        Este método:
+        1. Consulta APIs externas para obtener datos actualizados de odds
+        2. Gestiona caché para minimizar llamadas a la API y cumplir con límites
+        3. Soporta diferentes proveedores de API y tipos de mercados
         
         Args:
             sport: Deporte a consultar
@@ -248,14 +275,20 @@ class BookmakersDataFetcher:
         """
         Combina datos de jugadores con odds de casas de apuestas
         
+        Este método es crucial para:
+        1. Integrar datos de diferentes fuentes (predicciones + mercado)
+        2. Alinear correctamente los datos por jugador, fecha y línea de apuesta 
+        3. Crear columnas específicas para cada combinación de línea y casa
+        4. Habilitar análisis comparativo entre nuestras predicciones y el mercado
+        
         Args:
             player_data: DataFrame con datos de jugadores
-            odds_data: Datos de odds (de API o archivo)
+            odds_data: Datos de odds obtenidos mediante load_odds_from_api o load_odds_from_file
             target: Estadística objetivo (PTS, TRB, AST, 3P)
-            line_values: Valores de línea específicos a buscar
+            line_values: Lista de valores de línea a analizar
             
         Returns:
-            DataFrame con datos combinados
+            DataFrame combinado con datos de jugadores y odds de casas
         """
         if not odds_data.get('success', False) or not odds_data.get('data'):
             logger.error("No hay datos de odds válidos para combinar")
@@ -497,17 +530,23 @@ class BookmakersDataFetcher:
         noise_level: float = 0.05
     ) -> pd.DataFrame:
         """
-        Genera datos de odds simulados para pruebas cuando no hay datos reales disponibles
+        Simula datos de odds de casas de apuestas cuando no hay datos reales
+        
+        Este método es útil para:
+        1. Pruebas del sistema cuando no se tiene acceso a APIs o datos reales
+        2. Desarrollo y validación de algoritmos de análisis de mercado
+        3. Simulación de diferentes escenarios de mercado con distintos niveles de ruido
+        4. Entrenamiento y evaluación de estrategias de apuestas
         
         Args:
-            df: DataFrame con datos de jugadores
+            df: DataFrame con datos de jugadores/equipos
             target: Estadística objetivo (PTS, TRB, AST, 3P)
-            line_values: Valores de línea específicos a simular
-            bookmakers: Lista de casas de apuestas a simular
-            noise_level: Nivel de ruido para variación entre casas
+            line_values: Lista de valores de línea a simular
+            bookmakers: Lista de casas a simular
+            noise_level: Nivel de ruido/variación entre casas (0.05 = 5%)
             
         Returns:
-            DataFrame con columnas de odds simuladas
+            DataFrame con odds simuladas añadidas
         """
         # Valores por defecto
         if line_values is None:
@@ -588,6 +627,12 @@ class BookmakersDataFetcher:
     ) -> pd.DataFrame:
         """
         Analiza las diferencias entre odds de distintas casas de apuestas
+        
+        Este método permite:
+        1. Identificar qué casas ofrecen mejores odds sistemáticamente 
+        2. Detectar discrepancias significativas entre diferentes operadores
+        3. Encontrar casas que podrían tener ventaja para ciertos tipos de apuestas
+        4. Generar métricas comparativas para optimizar selección de operadores
         
         Args:
             df: DataFrame con datos de jugadores incluyendo odds

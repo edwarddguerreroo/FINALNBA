@@ -153,7 +153,37 @@ class SequenceGenerator:
             # Manejar diferentes tipos de estadísticas
             if stat == 'Win':
                 # Para estadísticas de victoria de equipo
-                over_under_results = player_data['team_score'] > line
+                if 'team_score' in player_data.columns:
+                    over_under_results = player_data['team_score'] > line
+                elif 'is_win' in player_data.columns:
+                    over_under_results = player_data['is_win'] > line
+                elif 'Win' in player_data.columns:
+                    over_under_results = player_data['Win'] > line
+                else:
+                    logger.warning(f"No se encontró columna para analizar Win en {player_data.columns[:5]}...")
+                    return historical_accuracy, confidence
+            elif stat == 'Total_Points_Over_Under':
+                # Para total de puntos
+                if 'total_points' in player_data.columns:
+                    over_under_results = player_data['total_points'] > line
+                elif 'total_score' in player_data.columns:
+                    over_under_results = player_data['total_score'] > line
+                elif all(x in player_data.columns for x in ['PTS', 'PTS_Opp']):
+                    over_under_results = (player_data['PTS'] + player_data['PTS_Opp']) > line
+                else:
+                    logger.warning(f"No se encontró columna para analizar Total_Points_Over_Under en {player_data.columns[:5]}...")
+                    return historical_accuracy, confidence
+            elif stat == 'Team_Points_Over_Under':
+                # Para puntos de equipo
+                if 'team_score' in player_data.columns:
+                    over_under_results = player_data['team_score'] > line
+                elif 'PTS' in player_data.columns:
+                    over_under_results = player_data['PTS'] > line
+                elif 'points' in player_data.columns:
+                    over_under_results = player_data['points'] > line
+                else:
+                    logger.warning(f"No se encontró columna para analizar Team_Points_Over_Under en {player_data.columns[:5]}...")
+                    return historical_accuracy, confidence
             else:
                 # Para estadísticas regulares de jugador
                 if stat not in player_data.columns:
@@ -188,7 +218,7 @@ class SequenceGenerator:
             confidence = base_confidence * sample_factor * line_factor
         
         except Exception as e:
-            print(f"Error en _analyze_historical_accuracy: {e}")
+            logger.warning(f"Error en _analyze_historical_accuracy para {stat}: {e}")
         
         return historical_accuracy, confidence
 
@@ -451,6 +481,56 @@ class SequenceGenerator:
                             except Exception as e:
                                 logger.error(f"Error procesando target Team_Points_Over_Under para equipo virtual: {str(e)}")
                                 continue
+                        elif stat == 'Double_Double':
+                            try:
+                                # Intentar diferentes formas de obtener el valor Double_Double
+                                if 'double_double' in target_row:
+                                    target_val = float(target_row['double_double'])
+                                elif all(x in target_row for x in ['PTS', 'TRB', 'AST', 'STL', 'BLK']):
+                                    # Calcular Double_Double a partir de stats individuales
+                                    stats = [
+                                        float(target_row['PTS']), 
+                                        float(target_row['TRB']), 
+                                        float(target_row['AST']), 
+                                        float(target_row['STL']), 
+                                        float(target_row['BLK'])
+                                    ]
+                                    # Double_Double = tener al menos 2 stats con 10+ puntos
+                                    target_val = 1 if sum(1 for s in stats if s >= 10) >= 2 else 0
+                                else:
+                                    logger.warning(f"No se pudo determinar Double_Double para {player if 'player' in locals() else team}")
+                                    continue
+                            except (TypeError, ValueError) as e:
+                                logger.error(f"Error de tipo de datos procesando target Double_Double: {str(e)}")
+                                continue
+                            except Exception as e:
+                                logger.error(f"Error procesando target Double_Double: {str(e)}")
+                                continue
+                        elif stat == 'Triple_Double':
+                            try:
+                                # Intentar diferentes formas de obtener el valor Triple_Double
+                                if 'triple_double' in target_row:
+                                    target_val = float(target_row['triple_double'])
+                                elif all(x in target_row for x in ['PTS', 'TRB', 'AST', 'STL', 'BLK']):
+                                    # Calcular Triple_Double a partir de stats individuales
+                                    stats = [
+                                        float(target_row['PTS']), 
+                                        float(target_row['TRB']), 
+                                        float(target_row['AST']), 
+                                        float(target_row['STL']), 
+                                        float(target_row['BLK'])
+                                    ]
+                                    # Triple_Double = tener al menos 3 stats con 10+ puntos
+                                    target_val = 1 if sum(1 for s in stats if s >= 10) >= 3 else 0
+                                else:
+                                    logger.warning(f"No se pudo determinar Triple_Double para {player if 'player' in locals() else team}")
+                                    continue
+                            except (TypeError, ValueError) as e:
+                                logger.error(f"Error de tipo de datos procesando target Triple_Double: {str(e)}")
+                                continue
+                            except Exception as e:
+                                logger.error(f"Error procesando target Triple_Double: {str(e)}")
+                                continue
                         else:
                             logger.warning(f"Target no soportado: {stat}")
                             continue
@@ -573,7 +653,7 @@ class SequenceGenerator:
                                     continue
                                 except Exception as e:
                                     logger.error(f"Error procesando target Total_Points_Over_Under para {team}: {str(e)}")
-                                continue
+                                    continue
                             elif stat == 'Team_Points_Over_Under':
                                 try:
                                     # Intentar diferentes formas de obtener los puntos del equipo
@@ -584,19 +664,69 @@ class SequenceGenerator:
                                     elif 'points' in target_row:
                                         target_val = float(target_row['points'])
                                     else:
-                                        logger.warning(f"No se pudo determinar los puntos del equipo virtual")
+                                        logger.warning(f"No se pudo determinar los puntos del equipo {team}")
                                         continue
                                     
                                     # Verificar que el valor no sea nulo o negativo
                                     if pd.isna(target_val) or target_val < 0:
-                                        logger.warning(f"Valor de puntos inválido para equipo virtual: {target_val}")
+                                        logger.warning(f"Valor de puntos inválido para equipo {team}: {target_val}")
                                         continue
                                 except (TypeError, ValueError) as e:
-                                    logger.error(f"Error de tipo de datos procesando target Team_Points_Over_Under para equipo virtual: {str(e)}")
+                                    logger.error(f"Error de tipo de datos procesando target Team_Points_Over_Under para {team}: {str(e)}")
                                     continue
                                 except Exception as e:
-                                    logger.error(f"Error procesando target Team_Points_Over_Under para equipo virtual: {str(e)}")
-                                continue
+                                    logger.error(f"Error procesando target Team_Points_Over_Under para {team}: {str(e)}")
+                                    continue
+                            elif stat == 'Double_Double':
+                                try:
+                                    # Intentar diferentes formas de obtener el valor Double_Double
+                                    if 'double_double' in target_row:
+                                        target_val = float(target_row['double_double'])
+                                    elif all(x in target_row for x in ['PTS', 'TRB', 'AST', 'STL', 'BLK']):
+                                        # Calcular Double_Double a partir de stats individuales
+                                        stats = [
+                                            float(target_row['PTS']), 
+                                            float(target_row['TRB']), 
+                                            float(target_row['AST']), 
+                                            float(target_row['STL']), 
+                                            float(target_row['BLK'])
+                                        ]
+                                        # Double_Double = tener al menos 2 stats con 10+ puntos
+                                        target_val = 1 if sum(1 for s in stats if s >= 10) >= 2 else 0
+                                    else:
+                                        logger.warning(f"No se pudo determinar Double_Double para {player if 'player' in locals() else team}")
+                                        continue
+                                except (TypeError, ValueError) as e:
+                                    logger.error(f"Error de tipo de datos procesando target Double_Double: {str(e)}")
+                                    continue
+                                except Exception as e:
+                                    logger.error(f"Error procesando target Double_Double: {str(e)}")
+                                    continue
+                            elif stat == 'Triple_Double':
+                                try:
+                                    # Intentar diferentes formas de obtener el valor Triple_Double
+                                    if 'triple_double' in target_row:
+                                        target_val = float(target_row['triple_double'])
+                                    elif all(x in target_row for x in ['PTS', 'TRB', 'AST', 'STL', 'BLK']):
+                                        # Calcular Triple_Double a partir de stats individuales
+                                        stats = [
+                                            float(target_row['PTS']), 
+                                            float(target_row['TRB']), 
+                                            float(target_row['AST']), 
+                                            float(target_row['STL']), 
+                                            float(target_row['BLK'])
+                                        ]
+                                        # Triple_Double = tener al menos 3 stats con 10+ puntos
+                                        target_val = 1 if sum(1 for s in stats if s >= 10) >= 3 else 0
+                                    else:
+                                        logger.warning(f"No se pudo determinar Triple_Double para {player if 'player' in locals() else team}")
+                                        continue
+                                except (TypeError, ValueError) as e:
+                                    logger.error(f"Error de tipo de datos procesando target Triple_Double: {str(e)}")
+                                    continue
+                                except Exception as e:
+                                    logger.error(f"Error procesando target Triple_Double: {str(e)}")
+                                    continue
                             else:
                                 logger.warning(f"Target no soportado: {stat}")
                                 continue
@@ -685,7 +815,34 @@ class SequenceGenerator:
                             feature_sequence = np.array(feature_sequence, dtype=np.float32).T
                             
                             # Generar target binario
-                            target_val = target_row[stat]
+                            if stat in ['Double_Double', 'Triple_Double']:
+                                try:
+                                    # Intentar obtener directamente el valor si existe
+                                    if stat in target_row:
+                                        target_val = float(target_row[stat])
+                                    # Si no existe, calcularlo a partir de las estadísticas
+                                    elif all(x in target_row for x in ['PTS', 'TRB', 'AST', 'STL', 'BLK']):
+                                        stats = [
+                                            float(target_row['PTS']), 
+                                            float(target_row['TRB']), 
+                                            float(target_row['AST']), 
+                                            float(target_row['STL']), 
+                                            float(target_row['BLK'])
+                                        ]
+                                        # Double_Double = tener al menos 2 stats con 10+ puntos
+                                        # Triple_Double = tener al menos 3 stats con 10+ puntos
+                                        min_stats = 2 if stat == 'Double_Double' else 3
+                                        target_val = 1 if sum(1 for s in stats if s >= 10) >= min_stats else 0
+                                    else:
+                                        logger.warning(f"No se pudo determinar {stat} para {player}")
+                                        continue
+                                except Exception as e:
+                                    logger.error(f"Error al obtener {stat}: {str(e)}")
+                                    continue
+                            else:
+                                # Para otras estadísticas, acceder directamente
+                                target_val = target_row[stat]
+                                
                             is_over = target_val > line
                             
                             # Extraer categóricos
@@ -764,7 +921,34 @@ class SequenceGenerator:
                                 feature_sequence = np.array(feature_sequence, dtype=np.float32).T
                                 
                                 # Generar target binario
-                                target_val = target_row[stat]
+                                if stat in ['Double_Double', 'Triple_Double']:
+                                    try:
+                                        # Intentar obtener directamente el valor si existe
+                                        if stat in target_row:
+                                            target_val = float(target_row[stat])
+                                        # Si no existe, calcularlo a partir de las estadísticas
+                                        elif all(x in target_row for x in ['PTS', 'TRB', 'AST', 'STL', 'BLK']):
+                                            stats = [
+                                                float(target_row['PTS']), 
+                                                float(target_row['TRB']), 
+                                                float(target_row['AST']), 
+                                                float(target_row['STL']), 
+                                                float(target_row['BLK'])
+                                            ]
+                                            # Double_Double = tener al menos 2 stats con 10+ puntos
+                                            # Triple_Double = tener al menos 3 stats con 10+ puntos
+                                            min_stats = 2 if stat == 'Double_Double' else 3
+                                            target_val = 1 if sum(1 for s in stats if s >= 10) >= min_stats else 0
+                                        else:
+                                            logger.warning(f"No se pudo determinar {stat} para {player}")
+                                            continue
+                                    except Exception as e:
+                                        logger.error(f"Error al obtener {stat}: {str(e)}")
+                                        continue
+                                else:
+                                    # Para otras estadísticas, acceder directamente
+                                    target_val = target_row[stat]
+                                    
                                 is_over = target_val > line
                                 
                                 # Extraer categóricos
@@ -1269,7 +1453,7 @@ class SequenceGenerator:
         
         if len(sequences) == 0:
             logger.warning("No se generaron secuencias. No se guardará nada.")
-            return
+            return None, None
         
         # Determinar el nombre base para los archivos
         target_name = self.target_columns[0] if self.target_columns else "unknown_target"
@@ -1801,28 +1985,97 @@ def prepare_all_target_sequences(
     
     results = {}
     
-    # Procesar cada target por separado
-    for target in targets:
-        try:
-            logger.info(f"Procesando target: {target}")
-            sequences_path, mapping_path = prepare_target_specific_sequences(
-                df=df,
-                target=target,
-                output_dir=output_dir,
-                sequence_length=sequence_length,
-                min_games=min_games,
-                confidence_threshold=confidence_threshold,
-                min_historical_accuracy=min_historical_accuracy,
-                null_threshold=null_threshold
-            )
-            
-            results[target] = (sequences_path, mapping_path)
-            logger.info(f"Target {target} procesado exitosamente")
-        except Exception as e:
-            logger.error(f"Error procesando target {target}: {e}")
-            continue
+    # Identificar targets de equipo y de jugador
+    team_targets = ['Win', 'Total_Points_Over_Under', 'Team_Points_Over_Under']
+    player_targets = [t for t in targets if t not in team_targets]
     
-    logger.info(f"Procesados {len(results)}/{len(targets)} targets exitosamente")
+    # Procesar primero los targets de equipo
+    team_targets_to_process = [t for t in targets if t in team_targets]
+    if team_targets_to_process:
+        # Verificar que tenemos datos de equipo
+        if 'Team' in df.columns:
+            logger.info(f"Procesando {len(team_targets_to_process)} targets de EQUIPO: {team_targets_to_process}")
+            team_count = 0
+            for target in team_targets_to_process:
+                try:
+                    logger.info(f"Procesando target de equipo: {target}")
+                    sequences_path, mapping_path = prepare_target_specific_sequences(
+                        df=df,
+                        target=target,
+                        output_dir=output_dir,
+                        sequence_length=sequence_length,
+                        min_games=min_games,
+                        confidence_threshold=confidence_threshold,
+                        min_historical_accuracy=min_historical_accuracy,
+                        null_threshold=null_threshold
+                    )
+                    
+                    # Verificar que las rutas no sean None
+                    if sequences_path is None or mapping_path is None:
+                        logger.warning(f"No se generaron secuencias válidas para el target de equipo {target}")
+                        continue
+                        
+                    results[target] = (sequences_path, mapping_path)
+                    team_count += 1
+                    logger.info(f"Target de equipo {target} procesado exitosamente")
+                except Exception as e:
+                    logger.error(f"Error procesando target de equipo {target}: {e}")
+                    continue
+            
+            logger.info(f"Secuencias de equipo generadas para {team_count} targets")
+        else:
+            logger.warning("No se encontró la columna 'Team' en los datos. No se procesarán targets de equipo.")
+    
+    # Ahora procesar los targets de jugador
+    player_targets_to_process = [t for t in targets if t in player_targets]
+    if player_targets_to_process:
+        # Verificar que tenemos datos de jugador
+        if 'Player' in df.columns:
+            logger.info(f"Procesando {len(player_targets_to_process)} targets de JUGADOR: {player_targets_to_process}")
+            player_count = 0
+            for target in player_targets_to_process:
+                try:
+                    logger.info(f"Procesando target de jugador: {target}")
+                    sequences_path, mapping_path = prepare_target_specific_sequences(
+                        df=df,
+                        target=target,
+                        output_dir=output_dir,
+                        sequence_length=sequence_length,
+                        min_games=min_games,
+                        confidence_threshold=confidence_threshold,
+                        min_historical_accuracy=min_historical_accuracy,
+                        null_threshold=null_threshold
+                    )
+                    
+                    # Verificar que las rutas no sean None
+                    if sequences_path is None or mapping_path is None:
+                        logger.warning(f"No se generaron secuencias válidas para el target de jugador {target}")
+                        continue
+                        
+                    results[target] = (sequences_path, mapping_path)
+                    player_count += 1
+                    logger.info(f"Target de jugador {target} procesado exitosamente")
+                except Exception as e:
+                    logger.error(f"Error procesando target de jugador {target}: {e}")
+                    continue
+            
+            logger.info(f"Secuencias de jugador generadas para {player_count} targets")
+        else:
+            logger.warning("No se encontró la columna 'Player' en los datos. No se procesarán targets de jugador.")
+    
+    # Resumen final
+    if results:
+        logger.info("\nRESUMEN DE SECUENCIAS GENERADAS")
+        logger.info("=" * 50)
+        for target in targets:
+            if target in results:
+                logger.info(f"Target {target}: [OK]")
+                logger.info(f"  - Secuencias: {results[target][0]}")
+                logger.info(f"  - Mapeo: {results[target][1]}")
+            else:
+                logger.info(f"Target {target}: [NO GENERADO]")
+    
+    logger.info(f"\nProcesados {len(results)}/{len(targets)} targets exitosamente")
     return results
 
 
