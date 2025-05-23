@@ -201,7 +201,16 @@ class NBADataLoader:
         """
         Combina los datos de partidos con los datos biométricos
         """
-        # Merge en base al nombre del jugador
+        # Verificar si los datos biométricos ya están integrados
+        biometric_columns = ['Height_Inches', 'Weight', 'BMI']
+        has_biometrics = all(col in game_data.columns for col in biometric_columns)
+        
+        if has_biometrics:
+            logger.info("Los datos biométricos ya están integrados en los datos de partidos")
+            return game_data
+        
+        # Si no están integrados, hacer el merge
+        logger.info("Integrando datos biométricos con datos de partidos")
         merged = pd.merge(
             game_data,
             biometrics[['Player', 'Height_Inches', 'Weight']],
@@ -211,10 +220,18 @@ class NBADataLoader:
         
         # Verificar que no perdimos datos
         if len(merged) != len(game_data):
-            print("¡Advertencia! Algunos jugadores no tienen datos biométricos")
+            logger.warning("Algunos jugadores no tienen datos biométricos")
             
-        # Calcular métricas adicionales
-        merged['BMI'] = (merged['Weight'] * 703) / (merged['Height_Inches'] ** 2)
+        # Calcular métricas adicionales solo si no existe BMI
+        if 'BMI' not in merged.columns:
+            # Verificar que tenemos las columnas necesarias para calcular BMI
+            if 'Weight' in merged.columns and 'Height_Inches' in merged.columns:
+                # Crear una máscara para valores válidos
+                valid_mask = (merged['Weight'].notna()) & (merged['Height_Inches'].notna()) & (merged['Height_Inches'] > 0)
+                merged['BMI'] = np.nan
+                merged.loc[valid_mask, 'BMI'] = (merged.loc[valid_mask, 'Weight'] * 703) / (merged.loc[valid_mask, 'Height_Inches'] ** 2)
+            else:
+                logger.warning("No se pueden calcular métricas BMI: faltan columnas Weight o Height_Inches")
         
         return merged
     

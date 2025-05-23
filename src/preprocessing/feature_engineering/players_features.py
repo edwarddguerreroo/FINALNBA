@@ -73,14 +73,6 @@ class PlayersFeatures:
         self.correlation_threshold = correlation_threshold
         self.enable_correlation_analysis = enable_correlation_analysis
         self.n_jobs = n_jobs
-        self.betting_lines = {
-            'PTS': [10, 15, 20, 25, 30, 35], 
-            'TRB': [4, 6, 8, 10, 12], 
-            'AST': [4, 6, 8, 10, 12], 
-            '3P': [1, 2, 3, 4, 5],
-            'Double_Double': [0.5],  # Para predicciones binarias de doble-doble
-            'Triple_Double': [0.5]   # Para predicciones binarias de triple-doble
-        }
         
         # Asegurar que las fechas estén en formato datetime
         if 'Date' in self.players_data.columns:
@@ -222,9 +214,6 @@ class PlayersFeatures:
             
             # Crear características específicas para predicción de triples
             self._create_3p_prediction_features()
-            
-            # Crear características para líneas de apuestas
-            self._create_betting_line_features()
             
             # Crear características de matchup para jugadores
             self._create_matchup_features()
@@ -1325,180 +1314,6 @@ class PlayersFeatures:
             logger.error(f"Error al crear características temporales: {str(e)}")
             logger.error(traceback.format_exc())
             
-        return self.players_data
-    
-    def _create_betting_line_features(self):
-        """
-        Crea características específicas para líneas de apuestas según historial
-        """
-        logger.info("Creando características para líneas de apuestas")
-        
-        try:
-            # Verificar si tenemos las columnas de estadísticas básicas
-            required_stats = ['PTS', 'TRB', 'AST', '3P']
-            available_stats = [stat for stat in required_stats if stat in self.players_data.columns]
-            
-            if not available_stats:
-                logger.error("No se encontraron estadísticas básicas para crear características de líneas")
-                return
-            
-            # Procesar cada jugador individualmente
-            for player in self.players_data['Player'].unique():
-                player_mask = self.players_data['Player'] == player
-                player_data = self.players_data[player_mask].sort_values('Date')
-                
-                # Solo procesar si hay suficientes partidos
-                if len(player_data) < 5:
-                    continue
-                
-                # Para cada tipo de estadística
-                for stat in available_stats:
-                    # Excluir Double_Double y Triple_Double
-                    if stat in ['Double_Double', 'Triple_Double']:
-                        continue
-                        
-                    if stat not in self.betting_lines:
-                        continue
-                    
-                    # Para cada línea de apuesta disponible
-                    for line in self.betting_lines[stat]:
-                        # Crear variables con rate de superar la línea para diferentes ventanas
-                        for window in self.window_sizes:
-                            col_name = f'{stat}_over_{line}_rate_{window}'
-                            
-                            # Inicializar columna si no existe
-                            if col_name not in self.players_data.columns:
-                                self.players_data[col_name] = 0
-                            
-                            # Para cada fecha, calcular el rate de los últimos 'window' partidos
-                            for i in range(len(player_data)):
-                                if i < window:
-                                    # Si no hay suficientes partidos previos, usar todos los disponibles
-                                    prev_games = player_data.iloc[:i+1]
-                                else:
-                                    # Usar los últimos 'window' partidos
-                                    prev_games = player_data.iloc[i-window+1:i+1]
-                                
-                                if len(prev_games) > 0:
-                                    # Calcular tasa de superar la línea
-                                    over_rate = (prev_games[stat] > line).mean()
-                                    
-                                    # Asignar al registro actual
-                                    idx = player_data.index[i]
-                                    self.players_data.loc[idx, col_name] = over_rate
-                        
-                        # Crear streaks actuales por encima/debajo de la línea
-                        over_streak_col = f'{stat}_over_{line}_streak'
-                        under_streak_col = f'{stat}_under_{line}_streak'
-                        
-                        # Inicializar columnas si no existen
-                        if over_streak_col not in self.players_data.columns:
-                            self.players_data[over_streak_col] = 0
-                        if under_streak_col not in self.players_data.columns:
-                            self.players_data[under_streak_col] = 0
-                        
-                        # Calcular streaks
-                        current_over_streak = 0
-                        current_under_streak = 0
-                        
-                        for i, (idx, row) in enumerate(player_data.iterrows()):
-                            if row[stat] > line:
-                                current_over_streak += 1
-                                current_under_streak = 0
-                            else:
-                                current_under_streak += 1
-                                current_over_streak = 0
-                            
-                            self.players_data.loc[idx, over_streak_col] = current_over_streak
-                            self.players_data.loc[idx, under_streak_col] = current_under_streak
-                        
-                        # Calcular consistencia en superar/no superar la línea
-                        consistency_col = f'{stat}_line_{line}_consistency'
-                        
-                        if consistency_col not in self.players_data.columns:
-                            self.players_data[consistency_col] = 0
-                        
-                        for window in [10, 20]:
-                            if len(player_data) >= window:
-                                for i in range(window, len(player_data) + 1):
-                                    # Obtener los últimos 'window' partidos
-                                    last_n_games = player_data.iloc[i-window:i]
-                                    
-                                    # Calcular qué tan consistente es el jugador respecto a la línea
-                                    over_ratio = (last_n_games[stat] > line).mean()
-                                    
-                                    # La consistencia es alta si el ratio está cerca de 0 o 1
-                                    # Usamos la función 2*|x-0.5| que mapea [0,1] a [0,1] con máximo en 0 y 1
-                                    consistency = 2 * abs(over_ratio - 0.5)
-                                    
-                                    # Asignar al último juego de la ventana
-                                    if i < len(player_data):
-                                        idx = player_data.index[i]
-                                        self.players_data.loc[idx, f'{consistency_col}_{window}'] = consistency
-            
-            # Identificar líneas de mayor valor para cada jugador
-            for stat in available_stats:
-                if stat in ['Double_Double', 'Triple_Double']:
-                    continue
-                    
-                if stat not in self.betting_lines:
-                    continue
-                
-                best_line_col = f'{stat}_best_line'
-                best_side_col = f'{stat}_best_side'
-                best_value_col = f'{stat}_line_value'
-                
-                self.players_data[best_line_col] = 0
-                self.players_data[best_side_col] = 'none'
-                self.players_data[best_value_col] = 0
-                
-                for player in self.players_data['Player'].unique():
-                    player_mask = self.players_data['Player'] == player
-                    player_data = self.players_data[player_mask].sort_values('Date')
-                    
-                    if len(player_data) < 10:
-                        continue
-                    
-                    # Para cada fecha, evaluar todas las líneas
-                    for i in range(10, len(player_data)):
-                        prior_games = player_data.iloc[:i]
-                        current_idx = player_data.index[i]
-                        
-                        best_ev = 0
-                        best_line = 0
-                        best_side = 'none'
-                        
-                        for line in self.betting_lines[stat]:
-                            # Calcular expectativa over/under con los partidos previos
-                            over_prob = (prior_games[stat] > line).mean()
-                            under_prob = 1 - over_prob
-                            
-                            # Calcular valor esperado (EV) asumiendo pago estándar -110 (1.91)
-                            # EV = (probabilidad_win * pago) - (probabilidad_loss)
-                            over_ev = (over_prob * 1.91) - under_prob
-                            under_ev = (under_prob * 1.91) - over_prob
-                            
-                            # Determinar mejor apuesta (la de mayor EV positivo)
-                            if over_ev > best_ev and over_ev > 0:
-                                best_ev = over_ev
-                                best_line = line
-                                best_side = 'over'
-                            elif under_ev > best_ev and under_ev > 0:
-                                best_ev = under_ev
-                                best_line = line
-                                best_side = 'under'
-                        
-                        # Guardar la mejor línea para este partido
-                        self.players_data.loc[current_idx, best_line_col] = best_line
-                        self.players_data.loc[current_idx, best_side_col] = best_side
-                        self.players_data.loc[current_idx, best_value_col] = best_ev
-            
-            logger.info("Características para líneas de apuestas creadas correctamente")
-            
-        except Exception as e:
-            logger.error(f"Error al crear características para líneas de apuestas: {str(e)}")
-            logger.error(traceback.format_exc())
-        
         return self.players_data
     
     def _create_physical_features(self):
