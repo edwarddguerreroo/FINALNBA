@@ -15,6 +15,9 @@ import seaborn as sns
 from scipy import stats
 import os
 import lightgbm as lgb
+from sklearn.preprocessing import StandardScaler
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.linear_model import BayesianRidge
 
 logger = logging.getLogger(__name__)
 
@@ -58,9 +61,8 @@ class PointsModel(BaseNBAModel):
             subsample=0.7,
             colsample_bytree=0.7,
             gamma=0.1,
-            # Aumentar la regularización para combatir sobreajuste
-            reg_alpha=1.5,     # Regularización L1 más agresiva (aumentada de 0.8)
-            reg_lambda=2.5,    # Regularización L2 más agresiva (aumentada de 1.5)
+            reg_alpha=1.5,     # Regularización L1 agresiva 
+            reg_lambda=2.5,    # Regularización L2 agresiva 
             random_state=42,
             n_jobs=-1
         )
@@ -147,6 +149,7 @@ class PointsModel(BaseNBAModel):
             'FGA', 'FG%',  # Intentos y porcentaje de tiros de campo
             '3PA', '3P%',  # Intentos y porcentaje de triples
             'FTA', 'FT%',  # Intentos y porcentaje de tiros libres
+            '2PA', '2P%',  # Intentos y porcentaje de dobles
         ]
         
         # Características de eficiencia específicas para puntos (creadas por feature engineering)
@@ -155,7 +158,7 @@ class PointsModel(BaseNBAModel):
             'pts_per_fga',
             'pts_from_3p', 'pts_from_2p', 'pts_from_ft',
             'pts_prop_from_3p', 'pts_prop_from_2p', 'pts_prop_from_ft',
-            'pts_per_scoring_poss',
+            'pts_per_scoring_poss', 
         ]
         
         # Características de ventanas móviles para puntos
@@ -164,6 +167,7 @@ class PointsModel(BaseNBAModel):
             rolling_features.extend([
                 f'PTS_mean_{window}',
                 f'PTS_std_{window}',
+                f'2P%_mean_{window}',
                 f'FG%_mean_{window}',
                 f'3P%_mean_{window}',
                 f'FT%_mean_{window}',
@@ -233,104 +237,90 @@ class PointsModel(BaseNBAModel):
     
     def _add_interaction_features(self, X):
         """
-        Agrega características de interacción entre las más importantes
-        para capturar relaciones no lineales, con énfasis especial en FGA y FG%.
+        Añade características de interacción y transformaciones no lineales.
         
         Args:
-            X (pd.DataFrame): Características base
+            X (pd.DataFrame): Características originales
             
         Returns:
-            pd.DataFrame: Características con interacciones añadidas
+            pd.DataFrame: Características aumentadas con interacciones
         """
-        # Características más importantes según análisis SHAP
-        top_features = ['FGA', 'FG%', '3PA', '3P%', 'FTA', 'FT%', 'MP']
-        interaction_features = {}
+        logger.info("Añadiendo características de interacción y transformaciones no lineales")
         
-        # Solo crear interacciones para características disponibles
-        available_top = [f for f in top_features if f in X.columns]
+        # Crear copia para evitar modificar el original
+        X_enhanced = X.copy()
         
-        # Crear características de interacción entre todas las características principales
-        for i, f1 in enumerate(available_top):
-            for f2 in available_top[i+1:]:
-                if f1 in X.columns and f2 in X.columns:
-                    name = f"{f1}_x_{f2}"
-                    interaction_features[name] = X[f1] * X[f2]
-        
-        # Características cuadráticas para las más relevantes
-        for feature in ['FGA', 'MP', 'FG%']:
-            if feature in X.columns:
-                quad_name = f"{feature}_squared"
-                interaction_features[quad_name] = X[feature] ** 2
-        
-        # Características cúbicas para FGA y FG% (para capturar relaciones aún más no lineales)
-        if 'FGA' in X.columns:
-            interaction_features['FGA_cubed'] = X['FGA'] ** 3
-        
-        if 'FG%' in X.columns:
-            interaction_features['FG%_cubed'] = X['FG%'] ** 3
-        
-        # Interacciones especiales entre FGA y FG% (basadas en conocimiento del dominio)
-        if 'FGA' in X.columns and 'FG%' in X.columns:
-            # Eficiencia de tiro (captura cómo varía la eficiencia con el volumen)
-            interaction_features['FGA_x_FG%_squared'] = X['FGA'] * (X['FG%'] ** 2)
-            interaction_features['FGA_squared_x_FG%'] = (X['FGA'] ** 2) * X['FG%']
+        # 1. Interacciones entre MP, FGA y FG% (variables de alta importancia)
+        if all(col in X.columns for col in ['MP', 'FGA', 'FG%']):
+            # Asegurar que no hay valores NaN
+            for col in ['MP', 'FGA', 'FG%']:
+                if X_enhanced[col].isna().any():
+                    logger.info(f"Imputando valores NaN en {col} antes de crear interacciones")
+                    X_enhanced[col] = X_enhanced[col].fillna(X_enhanced[col].median())
             
-            # Transformación logarítmica de la interacción
-            interaction_features['log_FGA_x_FG%'] = np.log1p(X['FGA']) * X['FG%']
+            # Interacciones multiplicativas
+            X_enhanced['MP_x_FGA'] = X_enhanced['MP'] * X_enhanced['FGA']
+            X_enhanced['MP_x_FG%'] = X_enhanced['MP'] * X_enhanced['FG%']
+            X_enhanced['FGA_x_FG%'] = X_enhanced['FGA'] * X_enhanced['FG%']
+            X_enhanced['MP_x_FGA_x_FG%'] = X_enhanced['MP'] * X_enhanced['FGA'] * X_enhanced['FG%']
             
-            # Ratio de eficiencia (puntos esperados por intento)
-            interaction_features['pts_per_fga_proxy'] = X['FG%'] * 2  # Aproximación simple
+            # Interacciones cuadráticas
+            X_enhanced['MP_squared'] = X_enhanced['MP'] ** 2
+            X_enhanced['FGA_squared'] = X_enhanced['FGA'] ** 2
+            X_enhanced['FG%_squared'] = X_enhanced['FG%'] ** 2
+            
+            # Interacciones cúbicas para capturar relaciones no lineales más complejas
+            X_enhanced['MP_cubed'] = X_enhanced['MP'] ** 3
+            X_enhanced['FGA_cubed'] = X_enhanced['FGA'] ** 3
+            X_enhanced['FG%_cubed'] = X_enhanced['FG%'] ** 3
+            
+            # Características polinomiales
+            X_enhanced['poly_MP_FGA'] = X_enhanced['MP_squared'] * X_enhanced['FGA']
+            X_enhanced['poly_FGA_FG%'] = X_enhanced['FGA_squared'] * X_enhanced['FG%']
+            X_enhanced['poly_MP_FG%'] = X_enhanced['MP_squared'] * X_enhanced['FG%']
+            X_enhanced['poly_FG%2'] = X_enhanced['FG%'] ** 2
+            X_enhanced['poly_FGA2'] = X_enhanced['FGA'] ** 2
+            
+            logger.info("Características de interacción MP, FGA, FG% creadas correctamente")
+            
+        # 2. Interacciones con 3P% y FT% si están disponibles
+        for col1, col2 in [('3P%', 'MP'), ('3P%', 'FTA'), ('3P%', 'FT%'), 
+                          ('FT%', 'MP'), ('FT%', 'FTA')]:
+            if all(c in X.columns for c in [col1, col2]):
+                col_name = f"{col1}_x_{col2}"
+                X_enhanced[col_name] = X_enhanced[col1] * X_enhanced[col2]
+                logger.info(f"Característica de interacción {col_name} creada")
+                
+        # 3. Ratio de eficiencia mejorado
+        if all(col in X.columns for col in ['FGA', 'MP']):
+            X_enhanced['FGA_per_minute'] = X_enhanced['FGA'] / X_enhanced['MP'].clip(lower=1)
+            logger.info("Característica de ratio FGA por minuto creada")
+            
+        # 4. Aproximación de puntos esperados
+        if all(col in X.columns for col in ['FGA', 'FG%', '3PA', '3P%', 'FTA', 'FT%']):
+            # Estimar puntos de tiros de campo de 2
+            fg2a = X_enhanced['FGA'] - X_enhanced['3PA']
+            fg2_pct = (X_enhanced['FG%'] * X_enhanced['FGA'] - X_enhanced['3P%'] * X_enhanced['3PA']) / fg2a.clip(lower=0.1)
+            
+            # Corregir valores fuera de rango
+            fg2_pct = fg2_pct.clip(lower=0, upper=1)
+            
+            # Calcular puntos esperados
+            pts_from_2 = 2 * fg2a * fg2_pct
+            pts_from_3 = 3 * X_enhanced['3PA'] * X_enhanced['3P%']
+            pts_from_ft = X_enhanced['FTA'] * X_enhanced['FT%']
+            
+            X_enhanced['pts_per_fga_proxy'] = (pts_from_2 + pts_from_3) / X_enhanced['FGA'].clip(lower=0.1)
+            X_enhanced['expected_pts'] = pts_from_2 + pts_from_3 + pts_from_ft
+            X_enhanced['pts_efficiency_index'] = X_enhanced['pts_per_fga_proxy'] * X_enhanced['FGA_per_minute']
+            
+            logger.info("Características de eficiencia y puntos esperados creadas")
+            
+        # Registrar el número de características añadidas
+        n_features_added = len(X_enhanced.columns) - len(X.columns)
+        logger.info(f"Total de {n_features_added} características de interacción añadidas")
         
-        # Interacciones con minutos jugados (MP) que es importante para contextualizar
-        if 'MP' in X.columns:
-            if 'FGA' in X.columns:
-                interaction_features['FGA_per_minute'] = X['FGA'] / np.maximum(X['MP'], 1)
-            if 'FG%' in X.columns:
-                interaction_features['FG%_x_MP'] = X['FG%'] * X['MP']
-                
-        # Características polinómicas selectivas usando PolynomialFeatures de sklearn
-        if 'FGA' in X.columns and 'FG%' in X.columns:
-            try:
-                from sklearn.preprocessing import PolynomialFeatures
-                
-                # Extraer solo las características necesarias
-                key_features_df = X[['FGA', 'FG%']].copy()
-                
-                # Verificar y manejar valores NaN
-                has_nans = key_features_df.isna().any().any()
-                if has_nans:
-                    # Opción 1: Imputar NaNs con la mediana
-                    key_features_df = key_features_df.fillna(key_features_df.median())
-                    logger.info("Imputados valores NaN en características clave antes de aplicar transformación polinómica")
-                
-                # Convertir a array NumPy para evitar problemas con tipos
-                key_features_array = key_features_df.values
-                
-                # Aplicar características polinómicas de grado 2
-                poly = PolynomialFeatures(degree=2, include_bias=False, interaction_only=False)
-                poly_features = poly.fit_transform(key_features_array)
-                
-                # Obtener nombres para las características polinómicas
-                feature_names = poly.get_feature_names_out(['FGA', 'FG%'])
-                
-                # Añadir solo las características que no hemos creado manualmente
-                for i, name in enumerate(feature_names):
-                    if i >= 2:  # Saltar las características originales
-                        # Reemplazar espacios con underscore para nombres de columnas válidos
-                        clean_name = f"poly_{name.replace(' ', '_')}"
-                        if clean_name not in interaction_features:
-                            interaction_features[clean_name] = poly_features[:, i]
-            except Exception as e:
-                logger.warning(f"Error al crear características polinómicas: {str(e)}")
-        
-        if interaction_features:
-            interactions_df = pd.DataFrame(interaction_features)
-            # Reemplazar infinitos y NaN
-            interactions_df = interactions_df.replace([np.inf, -np.inf], np.nan)
-            interactions_df = interactions_df.fillna(interactions_df.median())
-            return pd.concat([X, interactions_df], axis=1)
-        else:
-            return X
+        return X_enhanced
     
     def detect_outliers(self, X, method='isolation_forest', contamination=0.05):
         """
@@ -637,7 +627,7 @@ class PointsModel(BaseNBAModel):
                 X_test[col] = X_test[col].clip(lower=q_low, upper=q_high)
         
         # Aplicar transformaciones para manejar heteroscedasticidad para columnas clave
-        key_features = ['FGA', 'FG%', '3PA', '3P%', 'FTA', 'FT%', 'MP']
+        key_features = ['FGA', 'FG%', '2PA', '2P%', '3PA', '3P%', 'FTA', 'FT%', 'MP']
         
         for col in key_features:
             if col in X_train.columns and X_train[col].min() >= 0:
@@ -1245,48 +1235,69 @@ class PointsModel(BaseNBAModel):
 
     def _calibrate_predictions(self, predictions):
         """
-        Calibra las predicciones para corregir sesgos observados en la distribución de residuos.
-        Implementa técnicas adaptativas basadas en rangos de valores.
+        Calibra las predicciones para corregir sesgos sistemáticos.
+        Mejora particular para valores bajos con corrección específica.
         
         Args:
-            predictions: Predicciones originales
+            predictions (np.array): Predicciones originales
             
         Returns:
-            array: Predicciones calibradas
+            np.array: Predicciones calibradas
         """
         # Crear copia para no modificar el original
         calibrated = predictions.copy()
         
-        # 1. Corregir sesgo negativo observado en valores muy bajos (<5 puntos)
-        low_mask = calibrated < 5.0
-        if np.sum(low_mask) > 0:
-            # Corrección gradual basada en la magnitud
-            # Mayor corrección para valores más pequeños (donde el abanico es más pronunciado)
-            correction_factor = 1.0 + (0.15 * (1.0 - calibrated[low_mask] / 5.0))
-            calibrated[low_mask] *= correction_factor
+        # Análisis previo de las distribuciones de predicciones
+        pred_mean = np.mean(calibrated)
+        pred_std = np.std(calibrated)
         
-        # 2. Corregir sesgo en valores medios (5-15 puntos)
-        mid_mask = (calibrated >= 5.0) & (calibrated <= 15.0)
-        if np.sum(mid_mask) > 0:
-            # Corrección ligera
-            calibrated[mid_mask] *= 1.02
+        logger.info(f"Calibrando predicciones. Media original: {pred_mean:.4f}, Std: {pred_std:.4f}")
         
-        # 3. Corregir sesgo en valores altos (>25 puntos)
+        # 1. Corrección específica para valores muy bajos (< 1.0)
+        very_low_mask = calibrated < 1.0
+        if np.any(very_low_mask):
+            # Ajuste más agresivo para valores muy bajos
+            # Usamos una corrección de factor 0.15 (aumentado desde 0.10)
+            calibrated[very_low_mask] *= (1.0 + 0.15)
+            logger.info(f"Aplicada corrección del 15% a {np.sum(very_low_mask)} predicciones muy bajas (<1.0)")
+        
+        # 2. Corrección para valores bajos (1.0 - 5.0)
+        low_mask = (calibrated >= 1.0) & (calibrated < 5.0)
+        if np.any(low_mask):
+            # Aplicar un factor de corrección decreciente según el valor
+            # Mayor factor para valores más bajos
+            low_values = calibrated[low_mask]
+            correction_factors = 0.08 - 0.015 * (low_values - 1.0)  # Factor que decrece de 0.08 a 0.0
+            correction_factors = np.maximum(0, correction_factors)  # Asegurar factores no negativos
+            
+            calibrated[low_mask] *= (1.0 + correction_factors)
+            logger.info(f"Aplicada corrección progresiva a {np.sum(low_mask)} predicciones bajas (1.0-5.0)")
+        
+        # 3. Corrección para valores altos (>25.0) - suelen ser sobreestimados
         high_mask = calibrated > 25.0
-        if np.sum(high_mask) > 0:
-            # Aplicar corrección inversa a la tendencia a sobreestimar
-            calibrated[high_mask] *= 0.98
+        if np.any(high_mask):
+            # Reducir ligeramente valores muy altos
+            calibrated[high_mask] *= 0.95
+            logger.info(f"Aplicada reducción del 5% a {np.sum(high_mask)} predicciones altas (>25.0)")
         
-        # 4. Aplicar suavizado quantil para evitar valores extremos poco realistas
-        # Clips suaves para mantener valores en rangos razonables
-        calibrated = np.clip(calibrated, 0.0, 50.0)
+        # 4. Corrección logarítmica para valores intermedios para reducir heteroscedasticidad
+        # Esta transformación ayuda a estabilizar la varianza
+        mid_mask = (calibrated >= 5.0) & (calibrated <= 25.0)
+        if np.any(mid_mask):
+            # Transformar a espacio logarítmico
+            log_values = np.log1p(calibrated[mid_mask] - 5.0)
+            # Aplicar pequeña corrección en el espacio logarítmico
+            adjusted_log = log_values * 1.02  # Ajuste sutil del 2%
+            # Volver a transformar
+            calibrated[mid_mask] = np.expm1(adjusted_log) + 5.0
+            logger.info(f"Aplicada corrección logarítmica a {np.sum(mid_mask)} predicciones intermedias (5.0-25.0)")
         
-        # 5. Corrección específica para el pico en -1.0 observado en la distribución de residuos
-        # Este ajuste ayuda con la anomalía observada en el histograma
-        zero_mask = calibrated < 1.0
-        if np.sum(zero_mask) > 0:
-            # Corrección para evitar sobreestimar puntos cercanos a cero
-            calibrated[zero_mask] = calibrated[zero_mask] * 0.75
+        # Verificar efectos de la calibración
+        cal_mean = np.mean(calibrated)
+        cal_std = np.std(calibrated)
+        
+        logger.info(f"Calibración completa. Media final: {cal_mean:.4f}, Std: {cal_std:.4f}")
+        logger.info(f"Cambio en la media: {cal_mean - pred_mean:.4f}, en Std: {cal_std - pred_std:.4f}")
         
         return calibrated
     
@@ -3869,3 +3880,499 @@ if __name__ == "__main__":
         logger.info(f"Análisis de heteroscedasticidad por rangos completado. Mejora global: {result['overall_improvement']}")
         
         return result
+
+    def train_models_two_stage(self, X_train, y_train, use_scaling=True):
+        """
+        Implementa un modelo de dos etapas para predicción de puntos:
+        1. Primera etapa: Clasificador para determinar el rango de puntos
+        2. Segunda etapa: Regresores especializados por cada rango
+        
+        Args:
+            X_train: Características de entrenamiento
+            y_train: Variable objetivo
+            use_scaling: Si se debe aplicar escalado
+            
+        Returns:
+            self: Instancia actualizada con modelos entrenados
+        """
+        import numpy as np
+        import pandas as pd
+        from sklearn.preprocessing import StandardScaler
+        from sklearn.ensemble import RandomForestClassifier, GradientBoostingRegressor, HistGradientBoostingRegressor
+        from sklearn.linear_model import BayesianRidge, HuberRegressor
+        import xgboost as xgb
+        
+        logger.info("Entrenando modelo de dos etapas con especialización por rango")
+        
+        # Asegurar que no hay valores nulos
+        X_train_clean = X_train.copy()
+        y_train_clean = y_train.copy()
+        
+        if hasattr(X_train_clean, 'isna') and X_train_clean.isna().any().any():
+            logger.warning("Detectados valores NaN en X_train. Imputando...")
+            X_train_clean = X_train_clean.fillna(X_train_clean.median())
+            X_train_clean = X_train_clean.fillna(0)  # Por si quedan NaNs
+        
+        if hasattr(y_train_clean, 'isna') and y_train_clean.isna().any():
+            logger.warning("Detectados valores NaN en y_train. Imputando...")
+            y_train_clean = y_train_clean.fillna(y_train_clean.median())
+        
+        # Aplicar transformaciones logarítmicas y otras no lineales
+        X_train_transformed = self._apply_nonlinear_transformations(X_train_clean)
+        
+        # Definir rangos para especialización
+        # Estos umbrales se pueden ajustar según la distribución de puntos
+        y_values = y_train_clean.values if hasattr(y_train_clean, 'values') else y_train_clean
+        
+        # Usar cuartiles para definir rangos
+        q1 = np.percentile(y_values, 25)
+        q2 = np.percentile(y_values, 50)
+        q3 = np.percentile(y_values, 75)
+        
+        # Crear etiquetas para clasificación
+        y_ranges = np.zeros_like(y_values, dtype=int)
+        y_ranges[(y_values >= q1) & (y_values < q2)] = 1  # Rango bajo-medio
+        y_ranges[(y_values >= q2) & (y_values < q3)] = 2  # Rango medio-alto
+        y_ranges[y_values >= q3] = 3  # Rango alto
+        
+        # Guardar umbrales para predicción
+        self.range_thresholds = {
+            'q1': q1,
+            'q2': q2,
+            'q3': q3
+        }
+        
+        # Aplicar escalado si es necesario
+        if use_scaling:
+            scaler = StandardScaler()
+            X_train_scaled = scaler.fit_transform(X_train_transformed)
+            self.scaler = scaler
+        else:
+            X_train_scaled = X_train_transformed
+        
+        # 1. Primera etapa: Clasificador para determinar el rango
+        logger.info("Entrenando clasificador de rangos...")
+        range_classifier = RandomForestClassifier(
+            n_estimators=200,
+            max_depth=12,
+            min_samples_split=10,
+            random_state=42,
+            n_jobs=-1
+        )
+        range_classifier.fit(X_train_scaled, y_ranges)
+        self.models['range_classifier'] = range_classifier
+        
+        # 2. Segunda etapa: Regresores especializados por rango
+        # Entrenar un modelo para cada rango
+        for range_idx, range_name in enumerate(['very_low', 'low_mid', 'mid_high', 'high']):
+            # Filtrar datos para este rango
+            mask = (y_ranges == range_idx)
+            if mask.sum() < 50:  # Si hay muy pocos ejemplos, usar todos los datos
+                logger.warning(f"Muy pocos ejemplos para rango {range_name} ({mask.sum()}). Usando todos los datos.")
+                X_range = X_train_scaled
+                y_range = y_train_clean
+            else:
+                X_range = X_train_scaled[mask]
+                y_range = y_train_clean[mask]
+            
+            logger.info(f"Entrenando modelo especializado para rango {range_name} con {len(X_range)} ejemplos")
+            
+            # Seleccionar modelo apropiado según el rango
+            if range_idx == 0:  # Rango muy bajo - usar Bayesian Ridge para manejar incertidumbre
+                model = BayesianRidge(
+                    n_iter=300,
+                    alpha_1=1e-6,
+                    alpha_2=1e-6,
+                    lambda_1=1e-6,
+                    lambda_2=1e-6
+                )
+            elif range_idx == 1:  # Rango bajo-medio - usar HistGradientBoosting para robustez
+                model = HistGradientBoostingRegressor(
+                    max_iter=200,
+                    max_depth=8,
+                    learning_rate=0.1,
+                    l2_regularization=0.1,
+                    random_state=42
+                )
+            elif range_idx == 2:  # Rango medio-alto - usar XGBoost para precisión
+                model = xgb.XGBRegressor(
+                    n_estimators=200,
+                    max_depth=8,
+                    learning_rate=0.05,
+                    subsample=0.8,
+                    colsample_bytree=0.8,
+                    reg_alpha=0.01,
+                    reg_lambda=1,
+                    random_state=42
+                )
+            else:  # Rango alto - usar HuberRegressor para robustez a outliers
+                model = HuberRegressor(
+                    epsilon=1.5,
+                    alpha=0.0001,
+                    max_iter=1000
+                )
+            
+            # Entrenar modelo
+            model.fit(X_range, y_range)
+            self.models[f'range_{range_name}'] = model
+        
+        # Entrenar un modelo general como fallback
+        logger.info("Entrenando modelo general como fallback")
+        fallback_model = GradientBoostingRegressor(
+            n_estimators=200,
+            max_depth=8,
+            learning_rate=0.05,
+            subsample=0.8,
+            random_state=42
+        )
+        fallback_model.fit(X_train_scaled, y_train_clean)
+        self.models['fallback'] = fallback_model
+        
+        # Guardar información sobre los rangos
+        self.range_info = {
+            'very_low': {'threshold': 0, 'count': (y_ranges == 0).sum()},
+            'low_mid': {'threshold': q1, 'count': (y_ranges == 1).sum()},
+            'mid_high': {'threshold': q2, 'count': (y_ranges == 2).sum()},
+            'high': {'threshold': q3, 'count': (y_ranges == 3).sum()}
+        }
+        
+        logger.info("Modelo de dos etapas entrenado exitosamente")
+        return self
+
+    def _apply_nonlinear_transformations(self, X):
+        """
+        Aplica transformaciones no lineales a las características.
+        
+        Args:
+            X: DataFrame con características
+            
+        Returns:
+            DataFrame: Características con transformaciones aplicadas
+        """
+        import numpy as np
+        import pandas as pd
+        
+        X_transformed = X.copy()
+        
+        # Transformaciones logarítmicas para FGA y otras variables no lineales
+        if 'FGA' in X.columns:
+            # Log(x+1) para manejar ceros
+            X_transformed['FGA_log'] = np.log1p(X['FGA'])
+            
+            # Raíz cuadrada
+            X_transformed['FGA_sqrt'] = np.sqrt(X['FGA'])
+            
+            # Transformación Box-Cox simplificada (potencia 0.5)
+            X_transformed['FGA_boxcox'] = np.power(X['FGA'] + 1, 0.5)
+        
+        # Transformaciones para otras variables importantes
+        for col in ['MP', '3PA', 'FTA']:
+            if col in X.columns:
+                X_transformed[f'{col}_log'] = np.log1p(X[col])
+                X_transformed[f'{col}_sqrt'] = np.sqrt(X[col])
+        
+        # Variables de interacción importantes
+        if 'FGA' in X.columns and 'MP' in X.columns:
+            X_transformed['FGA_per_minute'] = X['FGA'] / np.maximum(X['MP'], 1)
+        
+        if 'PTS_last5' in X.columns:
+            X_transformed['PTS_trend'] = X['PTS_last5'] / np.maximum(X['PTS_last10'], 1)
+        
+        # Características contextuales si están disponibles
+        if 'days_rest' in X.columns:
+            X_transformed['fatigue_factor'] = 1 / np.maximum(X['days_rest'] + 1, 1)
+        
+        if 'away' in X.columns:
+            # Convertir booleano a numérico si es necesario
+            if X['away'].dtype == bool:
+                X_transformed['away'] = X['away'].astype(int)
+        
+        return X_transformed
+
+    def predict_two_stage(self, X_test):
+        """
+        Realiza predicciones usando el modelo de dos etapas.
+        
+        Args:
+            X_test: Características para predicción
+            
+        Returns:
+            array: Predicciones de puntos
+        """
+        import numpy as np
+        
+        # Verificar si tenemos los modelos necesarios
+        if 'range_classifier' not in self.models:
+            logger.warning("Modelo de dos etapas no entrenado. Usando predict_adaptive como fallback.")
+            return self.predict_adaptive(X_test)
+        
+        # Preparar datos
+        X_test_clean = X_test.copy()
+        
+        # Manejar valores NaN
+        if hasattr(X_test_clean, 'isna') and X_test_clean.isna().any().any():
+            logger.info("Detectados NaNs en datos de entrada para predict_two_stage. Imputando.")
+            X_test_clean = X_test_clean.fillna(X_test_clean.median())
+            X_test_clean = X_test_clean.fillna(0)
+        
+        # Aplicar transformaciones no lineales
+        X_test_transformed = self._apply_nonlinear_transformations(X_test_clean)
+        
+        # Aplicar escalado si es necesario
+        if hasattr(self, 'scaler'):
+            X_test_scaled = self.scaler.transform(X_test_transformed)
+        else:
+            X_test_scaled = X_test_transformed
+        
+        # 1. Predecir el rango usando el clasificador
+        range_predictions = self.models['range_classifier'].predict(X_test_scaled)
+        
+        # También obtener probabilidades para ponderación suave
+        range_probs = self.models['range_classifier'].predict_proba(X_test_scaled)
+        
+        # 2. Predecir puntos usando el modelo especializado para cada muestra
+        predictions = np.zeros(len(X_test))
+        
+        # Mapeo de índices de rango a nombres de modelos
+        range_models = {
+            0: 'range_very_low',
+            1: 'range_low_mid',
+            2: 'range_mid_high',
+            3: 'range_high'
+        }
+        
+        # Enfoque de ensemble ponderado por cuartiles
+        for i, (range_idx, probs) in enumerate(zip(range_predictions, range_probs)):
+            # Obtener predicción del modelo principal para este rango
+            main_model_name = range_models[range_idx]
+            
+            if main_model_name in self.models:
+                main_pred = self.models[main_model_name].predict([X_test_scaled[i]])[0]
+            else:
+                # Si no existe el modelo para este rango, usar fallback
+                main_pred = self.models['fallback'].predict([X_test_scaled[i]])[0]
+            
+            # Inicializar predicción ponderada
+            weighted_pred = main_pred
+            
+            # Si la confianza del clasificador no es muy alta, mezclar con otros modelos
+            max_prob = probs.max()
+            if max_prob < 0.7:  # Umbral de confianza
+                # Calcular predicción ponderada usando todos los modelos disponibles
+                total_weight = max_prob
+                weighted_pred = main_pred * max_prob
+                
+                # Añadir contribuciones de otros modelos según sus probabilidades
+                for other_range, prob in enumerate(probs):
+                    if other_range != range_idx and prob > 0.1:  # Umbral mínimo de probabilidad
+                        other_model_name = range_models[other_range]
+                        if other_model_name in self.models:
+                            other_pred = self.models[other_model_name].predict([X_test_scaled[i]])[0]
+                            weighted_pred += other_pred * prob
+                            total_weight += prob
+                
+                # Normalizar
+                if total_weight > 0:
+                    weighted_pred /= total_weight
+            
+            predictions[i] = weighted_pred
+        
+        # Aplicar calibración bayesiana para manejar incertidumbre en rangos extremos
+        predictions = self._apply_bayesian_calibration(predictions, range_predictions, range_probs)
+        
+        return predictions
+
+    def _apply_bayesian_calibration(self, predictions, range_predictions, range_probs):
+        """
+        Aplica calibración bayesiana para manejar incertidumbre en rangos extremos.
+        
+        Args:
+            predictions: Predicciones iniciales
+            range_predictions: Rangos predichos
+            range_probs: Probabilidades de cada rango
+            
+        Returns:
+            array: Predicciones calibradas
+        """
+        import numpy as np
+        
+        # Parámetros de calibración por rango
+        # Estos valores se pueden ajustar basados en análisis de error
+        calibration_params = {
+            0: {'prior_mean': 5.0, 'prior_strength': 0.3},  # Muy bajo
+            1: {'prior_mean': 10.0, 'prior_strength': 0.2},  # Bajo-medio
+            2: {'prior_mean': 18.0, 'prior_strength': 0.1},  # Medio-alto
+            3: {'prior_mean': 30.0, 'prior_strength': 0.2}   # Alto
+        }
+        
+        # Aplicar calibración bayesiana
+        calibrated_predictions = predictions.copy()
+        
+        for i, (pred, range_idx) in enumerate(zip(predictions, range_predictions)):
+            # Obtener parámetros para este rango
+            params = calibration_params[range_idx]
+            prior_mean = params['prior_mean']
+            prior_strength = params['prior_strength']
+            
+            # Ajustar la fuerza del prior basado en la confianza del clasificador
+            confidence = range_probs[i].max()
+            adjusted_strength = prior_strength * (1 - confidence)
+            
+            # Aplicar calibración bayesiana
+            # Formula: (prior_strength * prior_mean + prediction) / (prior_strength + 1)
+            calibrated_predictions[i] = (adjusted_strength * prior_mean + pred) / (adjusted_strength + 1)
+        
+        # Asegurar que no hay valores negativos
+        calibrated_predictions = np.maximum(calibrated_predictions, 0)
+        
+        return calibrated_predictions
+
+    def incorporate_contextual_variables(self, X, player_data=None, schedule_data=None):
+        """
+        Incorpora variables contextuales como fatiga acumulada y calendarios.
+        
+        Args:
+            X: DataFrame con características base
+            player_data: DataFrame con datos históricos de jugadores (opcional)
+            schedule_data: DataFrame con datos de calendario (opcional)
+            
+        Returns:
+            DataFrame: Características aumentadas con variables contextuales
+        """
+        import pandas as pd
+        import numpy as np
+        
+        X_augmented = X.copy()
+        
+        # Si no hay datos adicionales, devolver las características originales
+        if player_data is None and schedule_data is None:
+            return X_augmented
+        
+        # 1. Incorporar variables de fatiga si hay datos de jugadores
+        if player_data is not None and 'Player' in X.columns:
+            logger.info("Incorporando variables de fatiga basadas en historial de jugadores")
+            
+            # Asegurar que tenemos las columnas necesarias
+            required_cols = ['Player', 'Date', 'MP']
+            if all(col in player_data.columns for col in required_cols):
+                # Convertir fecha a datetime si es necesario
+                if not pd.api.types.is_datetime64_any_dtype(player_data['Date']):
+                    player_data['Date'] = pd.to_datetime(player_data['Date'], errors='coerce')
+                
+                # Ordenar por jugador y fecha
+                player_data = player_data.sort_values(['Player', 'Date'])
+                
+                # Calcular minutos acumulados en los últimos 7 días para cada jugador
+                player_fatigue = {}
+                
+                for player in player_data['Player'].unique():
+                    player_games = player_data[player_data['Player'] == player]
+                    
+                    # Calcular minutos acumulados en ventanas móviles
+                    player_games['MP_last3'] = player_games['MP'].rolling(window=3, min_periods=1).sum()
+                    player_games['MP_last5'] = player_games['MP'].rolling(window=5, min_periods=1).sum()
+                    player_games['MP_last7'] = player_games['MP'].rolling(window=7, min_periods=1).sum()
+                    
+                    # Calcular días de descanso
+                    player_games['days_rest'] = player_games['Date'].diff().dt.days.fillna(3)
+                    
+                    # Guardar últimos valores para cada jugador
+                    last_row = player_games.iloc[-1]
+                    player_fatigue[player] = {
+                        'MP_last3': last_row['MP_last3'],
+                        'MP_last5': last_row['MP_last5'],
+                        'MP_last7': last_row['MP_last7'],
+                        'days_rest': last_row['days_rest']
+                    }
+                
+                # Añadir variables de fatiga a X
+                for idx, row in X.iterrows():
+                    player = row['Player']
+                    if player in player_fatigue:
+                        for var, value in player_fatigue[player].items():
+                            X_augmented.loc[idx, var] = value
+                    else:
+                        # Valores por defecto si no hay datos
+                        X_augmented.loc[idx, 'MP_last3'] = 0
+                        X_augmented.loc[idx, 'MP_last5'] = 0
+                        X_augmented.loc[idx, 'MP_last7'] = 0
+                        X_augmented.loc[idx, 'days_rest'] = 3
+                
+                # Crear índices de fatiga
+                X_augmented['fatigue_index'] = X_augmented['MP_last7'] / (X_augmented['days_rest'] + 1)
+                X_augmented['fatigue_index'] = X_augmented['fatigue_index'].fillna(0)
+        
+        # 2. Incorporar variables de calendario si hay datos de calendario
+        if schedule_data is not None and 'Team' in X.columns and 'Opp' in X.columns:
+            logger.info("Incorporando variables contextuales de calendario")
+            
+            # Asegurar que tenemos las columnas necesarias
+            required_cols = ['Team', 'Opp', 'Date', 'away']
+            if all(col in schedule_data.columns for col in required_cols):
+                # Convertir fecha a datetime si es necesario
+                if not pd.api.types.is_datetime64_any_dtype(schedule_data['Date']):
+                    schedule_data['Date'] = pd.to_datetime(schedule_data['Date'], errors='coerce')
+                
+                # Calcular variables de calendario para cada equipo
+                team_schedule = {}
+                
+                for team in schedule_data['Team'].unique():
+                    team_games = schedule_data[schedule_data['Team'] == team]
+                    team_games = team_games.sort_values('Date')
+                    
+                    # Calcular juegos consecutivos
+                    team_games['back_to_back'] = (team_games['Date'].diff().dt.days == 1).astype(int)
+                    
+                    # Calcular juegos en los últimos 5 días
+                    team_games['games_last5d'] = 0
+                    for i in range(len(team_games)):
+                        if i == 0:
+                            team_games.iloc[i, team_games.columns.get_loc('games_last5d')] = 0
+                        else:
+                            current_date = team_games.iloc[i]['Date']
+                            prev_5d = team_games.iloc[:i][team_games.iloc[:i]['Date'] >= (current_date - pd.Timedelta(days=5))]
+                            team_games.iloc[i, team_games.columns.get_loc('games_last5d')] = len(prev_5d)
+                    
+                    # Guardar últimos valores para cada equipo
+                    last_row = team_games.iloc[-1]
+                    team_schedule[team] = {
+                        'back_to_back': last_row['back_to_back'],
+                        'games_last5d': last_row['games_last5d'],
+                        'away_streak': team_games['away'].rolling(window=3, min_periods=1).sum().iloc[-1]
+                    }
+                
+                # Añadir variables de calendario a X
+                for idx, row in X.iterrows():
+                    team = row['Team']
+                    opp = row['Opp']
+                    
+                    # Variables para el equipo
+                    if team in team_schedule:
+                        for var, value in team_schedule[team].items():
+                            X_augmented.loc[idx, f'team_{var}'] = value
+                    else:
+                        X_augmented.loc[idx, 'team_back_to_back'] = 0
+                        X_augmented.loc[idx, 'team_games_last5d'] = 0
+                        X_augmented.loc[idx, 'team_away_streak'] = 0
+                    
+                    # Variables para el oponente
+                    if opp in team_schedule:
+                        for var, value in team_schedule[opp].items():
+                            X_augmented.loc[idx, f'opp_{var}'] = value
+                    else:
+                        X_augmented.loc[idx, 'opp_back_to_back'] = 0
+                        X_augmented.loc[idx, 'opp_games_last5d'] = 0
+                        X_augmented.loc[idx, 'opp_away_streak'] = 0
+                
+                # Crear índice de ventaja/desventaja de calendario
+                X_augmented['schedule_advantage'] = (
+                    X_augmented['opp_games_last5d'] - X_augmented['team_games_last5d'] +
+                    X_augmented['opp_back_to_back'] - X_augmented['team_back_to_back']
+                )
+        
+        # Rellenar valores NaN en las nuevas columnas
+        for col in X_augmented.columns:
+            if col not in X.columns:
+                X_augmented[col] = X_augmented[col].fillna(0)
+        
+        return X_augmented
