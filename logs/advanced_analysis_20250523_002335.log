@@ -1,0 +1,71 @@
+2025-05-23 00:23:35,533 - __main__ - INFO - Cargando datos...
+2025-05-23 00:23:35,534 - src.models.points_model - INFO - Modelos mejorados configurados para prediccion de puntos
+2025-05-23 00:23:35,534 - src.models.model_trainer - INFO - Inicializados 6 modelos específicos
+2025-05-23 00:23:35,534 - src.models.model_trainer - INFO - Iniciando carga y preparación de datos
+2025-05-23 00:23:36,150 - DoubleDouble - INFO - Se identificaron 4760 doble-dobles y 305 triple-dobles
+2025-05-23 00:23:36,152 - DoubleDouble - INFO - VALIDACIÓN: Hay 1 doble-dobles sin puntos (legítimos)
+2025-05-23 00:23:36,188 - src.preprocessing.data_loader - INFO - Los datos biométricos ya están integrados en los datos de partidos
+2025-05-23 00:23:36,190 - src.models.model_trainer - INFO - Datos cargados: 55766 registros de jugadores
+2025-05-23 00:23:36,190 - src.models.model_trainer - INFO - Preparación de datos completada
+2025-05-23 00:23:36,190 - __main__ - INFO - Verificando modelos...
+2025-05-23 00:23:36,190 - src.models.model_trainer - INFO - Iniciando entrenamiento de todos los modelos
+2025-05-23 00:23:36,191 - src.models.model_trainer - INFO - Entrenando modelo para points
+2025-05-23 00:23:36,191 - src.models.points_model - INFO - Caracteristicas disponibles para puntos: 17/87
+2025-05-23 00:23:36,206 - src.models.points_model - INFO - Estadisticas de puntos - Media: 10.6, Mediana: 9.0, Min: 0, Max: 47
+2025-05-23 00:23:36,240 - src.models.base_model - INFO - Datos preparados para PTS: Train: 44807, Test: 10959
+2025-05-23 00:23:38,231 - src.models.points_model - INFO - Filtrados 4297 outliers de 44807 muestras.
+2025-05-23 00:23:38,236 - src.models.points_model - INFO - Distribución original por rangos de puntos: PTS
+(0, 5]       9521
+(5, 10]      9317
+(10, 15]     7071
+(15, 20]     4494
+(20, 25]     2650
+(25, 30]     1332
+(30, 40]      730
+(40, 100]      29
+Name: count, dtype: int64
+2025-05-23 00:23:38,238 - src.models.points_model - INFO - Rangos subrepresentados: [Interval(25, 30, closed='right'), Interval(30, 40, closed='right'), Interval(40, 100, closed='right')]
+2025-05-23 00:23:38,244 - src.models.points_model - INFO - Añadidas 693 muestras para el rango (25, 30]
+2025-05-23 00:23:38,249 - src.models.points_model - INFO - Añadidas 1295 muestras para el rango (30, 40]
+2025-05-23 00:23:38,254 - src.models.points_model - INFO - Añadidas 1996 muestras para el rango (40, 100]
+2025-05-23 00:23:38,259 - src.models.points_model - INFO - Distribución después del balanceo: PTS
+(0, 5]       9521
+(5, 10]      9317
+(10, 15]     7071
+(15, 20]     4494
+(20, 25]     2650
+(25, 30]     2025
+(30, 40]     2025
+(40, 100]    2025
+Name: count, dtype: int64
+2025-05-23 00:23:38,269 - src.models.points_model - INFO - Añadiendo características de interacción y transformaciones no lineales
+2025-05-23 00:23:38,283 - src.models.points_model - INFO - Características de interacción MP, FGA, FG% creadas correctamente
+2025-05-23 00:23:38,286 - src.models.points_model - INFO - Característica de interacción 3P%_x_MP creada
+2025-05-23 00:23:38,287 - src.models.points_model - INFO - Característica de interacción 3P%_x_FTA creada
+2025-05-23 00:23:38,288 - src.models.points_model - INFO - Característica de interacción 3P%_x_FT% creada
+2025-05-23 00:23:38,290 - src.models.points_model - INFO - Característica de interacción FT%_x_MP creada
+2025-05-23 00:23:38,292 - src.models.points_model - INFO - Característica de interacción FT%_x_FTA creada
+2025-05-23 00:23:38,294 - src.models.points_model - INFO - Característica de ratio FGA por minuto creada
+2025-05-23 00:23:38,303 - src.models.points_model - INFO - Características de eficiencia y puntos esperados creadas
+2025-05-23 00:23:38,304 - src.models.points_model - INFO - Total de 24 características de interacción añadidas
+2025-05-23 00:23:38,304 - src.models.points_model - INFO - Añadiendo características de interacción y transformaciones no lineales
+2025-05-23 00:23:38,312 - src.models.points_model - INFO - Características de interacción MP, FGA, FG% creadas correctamente
+2025-05-23 00:23:38,313 - src.models.points_model - INFO - Característica de interacción 3P%_x_MP creada
+2025-05-23 00:23:38,315 - src.models.points_model - INFO - Característica de interacción 3P%_x_FTA creada
+2025-05-23 00:23:38,316 - src.models.points_model - INFO - Característica de interacción 3P%_x_FT% creada
+2025-05-23 00:23:38,317 - src.models.points_model - INFO - Característica de interacción FT%_x_MP creada
+2025-05-23 00:23:38,319 - src.models.points_model - INFO - Característica de interacción FT%_x_FTA creada
+2025-05-23 00:23:38,320 - src.models.points_model - INFO - Característica de ratio FGA por minuto creada
+2025-05-23 00:23:38,325 - src.models.points_model - INFO - Características de eficiencia y puntos esperados creadas
+2025-05-23 00:23:38,326 - src.models.points_model - INFO - Total de 24 características de interacción añadidas
+2025-05-23 00:23:38,497 - src.models.points_model - INFO - Aplicada transformacion logaritmica a la variable objetivo 'PTS'
+2025-05-23 00:23:38,499 - src.models.base_model - INFO - Entrenando modelos para PTS
+2025-05-23 00:23:38,557 - src.models.base_model - INFO - Entrenando random_forest
+2025-05-23 00:23:53,564 - src.models.base_model - INFO - random_forest entrenado exitosamente
+2025-05-23 00:23:53,564 - src.models.base_model - INFO - Entrenando xgboost
+2025-05-23 00:23:55,448 - src.models.base_model - INFO - xgboost entrenado exitosamente
+2025-05-23 00:23:55,448 - src.models.base_model - INFO - Entrenando lightgbm
+2025-05-23 00:23:56,057 - src.models.base_model - INFO - lightgbm entrenado exitosamente
+2025-05-23 00:23:56,058 - src.models.base_model - INFO - Entrenando hist_gb
+2025-05-23 00:23:58,827 - src.models.base_model - INFO - hist_gb entrenado exitosamente
+2025-05-23 00:23:58,827 - src.models.base_model - INFO - Entrenando huber

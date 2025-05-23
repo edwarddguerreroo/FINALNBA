@@ -150,6 +150,8 @@ class PointsModel(BaseNBAModel):
             '3PA', '3P%',  # Intentos y porcentaje de triples
             'FTA', 'FT%',  # Intentos y porcentaje de tiros libres
             '2PA', '2P%',  # Intentos y porcentaje de dobles
+            'TS%', # True Shooting Percentage
+            'pts_per_possession'
         ]
         
         # Características de eficiencia específicas para puntos (creadas por feature engineering)
@@ -158,7 +160,7 @@ class PointsModel(BaseNBAModel):
             'pts_per_fga',
             'pts_from_3p', 'pts_from_2p', 'pts_from_ft',
             'pts_prop_from_3p', 'pts_prop_from_2p', 'pts_prop_from_ft',
-            'pts_per_scoring_poss', 
+            'pts_per_scoring_poss', 'scoring_efficiency',
         ]
         
         # Características de ventanas móviles para puntos
@@ -169,6 +171,7 @@ class PointsModel(BaseNBAModel):
                 f'PTS_std_{window}',
                 f'2P%_mean_{window}',
                 f'FG%_mean_{window}',
+                f'TS%_mean_{window}',
                 f'3P%_mean_{window}',
                 f'FT%_mean_{window}',
                 f'MP_mean_{window}',
@@ -199,6 +202,11 @@ class PointsModel(BaseNBAModel):
             'pts_home_avg',
             'pts_away_avg',
             'pts_home_away_diff',
+            'days_rest', 
+            'is_back_to_back', 
+            'has_overtime', 
+            'overtime_periods',
+            'is_high_usage'
         ]
         
         # Características físicas y de posición
