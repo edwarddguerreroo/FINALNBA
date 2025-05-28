@@ -1,0 +1,136 @@
+2025-05-28 15:38:58,097 - __main__ - INFO - Cargando datos...
+2025-05-28 15:38:58,566 - DoubleDouble - INFO - Se identificaron 4766 doble-dobles y 305 triple-dobles
+2025-05-28 15:38:58,568 - DoubleDouble - INFO - VALIDACIÓN: Hay 1 doble-dobles sin puntos (legítimos)
+2025-05-28 15:38:58,597 - src.preprocessing.data_loader - INFO - Integrando datos biométricos con datos de partidos
+2025-05-28 15:38:58,643 - __main__ - INFO - Datos cargados: 5226 registros
+2025-05-28 15:38:58,643 - __main__ - INFO - Creando y entrenando modelo...
+2025-05-28 15:38:58,644 - src.models.teams.total_points.model_total_points - INFO - Usando dispositivo: cpu
+2025-05-28 15:38:58,644 - src.models.teams.total_points.model_total_points - INFO - Iniciando entrenamiento con VALIDACIÓN CRUZADA TEMPORAL MEJORADA...
+2025-05-28 15:38:58,644 - src.models.teams.total_points.model_total_points - INFO - Aplicando validación robusta a datos de entrada...
+2025-05-28 15:38:58,653 - src.models.teams.total_points.model_total_points - WARNING - Feature engineering: 2613 NaNs restantes después de limpieza
+2025-05-28 15:38:58,656 - src.models.teams.total_points.model_total_points - INFO - Generando features independientes (sin data leakage)...
+2025-05-28 15:38:59,660 - src.models.teams.total_points.model_total_points - INFO - Aplicando filtro final de correlación >85% para estabilidad...
+2025-05-28 15:38:59,860 - src.models.teams.total_points.model_total_points - INFO - Creando 'total_points' como PTS + PTS_Opp
+2025-05-28 15:38:59,861 - src.models.teams.total_points.model_total_points - INFO - Validando datos preparados para entrenamiento...
+2025-05-28 15:38:59,873 - src.models.teams.total_points.model_total_points - INFO - Datos de entrenamiento validados: 5226 muestras válidas de 5226 originales
+2025-05-28 15:38:59,874 - src.models.teams.total_points.model_total_points - INFO - Features independientes: 30 features
+2025-05-28 15:38:59,888 - src.models.teams.total_points.model_total_points - INFO - Rango temporal: 2023-10-24T00:00:00.000000000 a 2025-05-24T00:00:00.000000000
+2025-05-28 15:38:59,889 - src.models.teams.total_points.model_total_points - INFO - Entrenando solo 4 modelos activos en lugar de todos los modelos
+2025-05-28 15:38:59,889 - src.models.teams.total_points.model_total_points - INFO - Modelos activos: ['extra_trees_primary', 'gradient_boost_primary', 'random_forest_primary', 'ridge_ultra_conservative']
+2025-05-28 15:38:59,890 - src.models.teams.total_points.model_total_points - INFO - Modelo extra_trees_primary inicializado (peso: 0.35)
+2025-05-28 15:38:59,890 - src.models.teams.total_points.model_total_points - INFO - Modelo gradient_boost_primary inicializado (peso: 0.30)
+2025-05-28 15:38:59,890 - src.models.teams.total_points.model_total_points - INFO - Modelo random_forest_primary inicializado (peso: 0.25)
+2025-05-28 15:38:59,891 - src.models.teams.total_points.model_total_points - INFO - Modelo ridge_ultra_conservative inicializado (peso: 0.10)
+2025-05-28 15:38:59,891 - src.models.teams.total_points.model_total_points - INFO - Optimizacion: 4 modelos vs 7 totales
+2025-05-28 15:38:59,891 - src.models.teams.total_points.model_total_points - INFO - Iniciando validación cruzada temporal (7 folds)...
+2025-05-28 15:38:59,892 - src.models.teams.total_points.model_total_points - INFO - 
+--- FOLD 1/7 ---
+2025-05-28 15:38:59,892 - src.models.teams.total_points.model_total_points - INFO - Entrenamiento: 2023-10-24T00:00:00.000000000 a 2023-12-11T00:00:00.000000000
+2025-05-28 15:38:59,893 - src.models.teams.total_points.model_total_points - INFO - Validación: 2023-12-11T00:00:00.000000000 a 2024-01-24T00:00:00.000000000
+2025-05-28 15:38:59,898 - src.models.teams.total_points.model_total_points - INFO - Entrenando solo 4 modelos activos en lugar de todos los modelos
+2025-05-28 15:38:59,899 - src.models.teams.total_points.model_total_points - INFO - Modelos activos: ['extra_trees_primary', 'gradient_boost_primary', 'random_forest_primary', 'ridge_ultra_conservative']
+2025-05-28 15:38:59,900 - src.models.teams.total_points.model_total_points - INFO - Modelo extra_trees_primary inicializado (peso: 0.35)
+2025-05-28 15:38:59,901 - src.models.teams.total_points.model_total_points - INFO - Modelo gradient_boost_primary inicializado (peso: 0.30)
+2025-05-28 15:38:59,901 - src.models.teams.total_points.model_total_points - INFO - Modelo random_forest_primary inicializado (peso: 0.25)
+2025-05-28 15:38:59,902 - src.models.teams.total_points.model_total_points - INFO - Modelo ridge_ultra_conservative inicializado (peso: 0.10)
+2025-05-28 15:38:59,902 - src.models.teams.total_points.model_total_points - INFO - Optimizacion: 4 modelos vs 7 totales
+2025-05-28 15:39:00,708 - src.models.teams.total_points.model_total_points - INFO - Fold 1 - MAE: 6.814, Acc: 38.3%, R²: 0.696
+2025-05-28 15:39:00,708 - src.models.teams.total_points.model_total_points - INFO - 
+--- FOLD 2/7 ---
+2025-05-28 15:39:00,708 - src.models.teams.total_points.model_total_points - INFO - Entrenamiento: 2023-10-24T00:00:00.000000000 a 2024-01-24T00:00:00.000000000
+2025-05-28 15:39:00,708 - src.models.teams.total_points.model_total_points - INFO - Validación: 2024-01-25T00:00:00.000000000 a 2024-03-13T00:00:00.000000000
+2025-05-28 15:39:00,711 - src.models.teams.total_points.model_total_points - INFO - Entrenando solo 4 modelos activos en lugar de todos los modelos
+2025-05-28 15:39:00,711 - src.models.teams.total_points.model_total_points - INFO - Modelos activos: ['extra_trees_primary', 'gradient_boost_primary', 'random_forest_primary', 'ridge_ultra_conservative']
+2025-05-28 15:39:00,711 - src.models.teams.total_points.model_total_points - INFO - Modelo extra_trees_primary inicializado (peso: 0.35)
+2025-05-28 15:39:00,711 - src.models.teams.total_points.model_total_points - INFO - Modelo gradient_boost_primary inicializado (peso: 0.30)
+2025-05-28 15:39:00,711 - src.models.teams.total_points.model_total_points - INFO - Modelo random_forest_primary inicializado (peso: 0.25)
+2025-05-28 15:39:00,711 - src.models.teams.total_points.model_total_points - INFO - Modelo ridge_ultra_conservative inicializado (peso: 0.10)
+2025-05-28 15:39:00,711 - src.models.teams.total_points.model_total_points - INFO - Optimizacion: 4 modelos vs 7 totales
+2025-05-28 15:39:01,595 - src.models.teams.total_points.model_total_points - INFO - Fold 2 - MAE: 5.847, Acc: 44.3%, R²: 0.770
+2025-05-28 15:39:01,595 - src.models.teams.total_points.model_total_points - INFO - 
+--- FOLD 3/7 ---
+2025-05-28 15:39:01,595 - src.models.teams.total_points.model_total_points - INFO - Entrenamiento: 2023-10-24T00:00:00.000000000 a 2024-03-13T00:00:00.000000000
+2025-05-28 15:39:01,595 - src.models.teams.total_points.model_total_points - INFO - Validación: 2024-03-13T00:00:00.000000000 a 2024-05-30T00:00:00.000000000
+2025-05-28 15:39:01,603 - src.models.teams.total_points.model_total_points - INFO - Entrenando solo 4 modelos activos en lugar de todos los modelos
+2025-05-28 15:39:01,604 - src.models.teams.total_points.model_total_points - INFO - Modelos activos: ['extra_trees_primary', 'gradient_boost_primary', 'random_forest_primary', 'ridge_ultra_conservative']
+2025-05-28 15:39:01,604 - src.models.teams.total_points.model_total_points - INFO - Modelo extra_trees_primary inicializado (peso: 0.35)
+2025-05-28 15:39:01,604 - src.models.teams.total_points.model_total_points - INFO - Modelo gradient_boost_primary inicializado (peso: 0.30)
+2025-05-28 15:39:01,604 - src.models.teams.total_points.model_total_points - INFO - Modelo random_forest_primary inicializado (peso: 0.25)
+2025-05-28 15:39:01,604 - src.models.teams.total_points.model_total_points - INFO - Modelo ridge_ultra_conservative inicializado (peso: 0.10)
+2025-05-28 15:39:01,604 - src.models.teams.total_points.model_total_points - INFO - Optimizacion: 4 modelos vs 7 totales
+2025-05-28 15:39:02,634 - src.models.teams.total_points.model_total_points - INFO - Fold 3 - MAE: 4.300, Acc: 47.8%, R²: 0.862
+2025-05-28 15:39:02,635 - src.models.teams.total_points.model_total_points - INFO - 
+--- FOLD 4/7 ---
+2025-05-28 15:39:02,635 - src.models.teams.total_points.model_total_points - INFO - Entrenamiento: 2023-10-24T00:00:00.000000000 a 2024-05-30T00:00:00.000000000
+2025-05-28 15:39:02,635 - src.models.teams.total_points.model_total_points - INFO - Validación: 2024-06-06T00:00:00.000000000 a 2024-12-04T00:00:00.000000000
+2025-05-28 15:39:02,639 - src.models.teams.total_points.model_total_points - INFO - Entrenando solo 4 modelos activos en lugar de todos los modelos
+2025-05-28 15:39:02,639 - src.models.teams.total_points.model_total_points - INFO - Modelos activos: ['extra_trees_primary', 'gradient_boost_primary', 'random_forest_primary', 'ridge_ultra_conservative']
+2025-05-28 15:39:02,639 - src.models.teams.total_points.model_total_points - INFO - Modelo extra_trees_primary inicializado (peso: 0.35)
+2025-05-28 15:39:02,639 - src.models.teams.total_points.model_total_points - INFO - Modelo gradient_boost_primary inicializado (peso: 0.30)
+2025-05-28 15:39:02,639 - src.models.teams.total_points.model_total_points - INFO - Modelo random_forest_primary inicializado (peso: 0.25)
+2025-05-28 15:39:02,640 - src.models.teams.total_points.model_total_points - INFO - Modelo ridge_ultra_conservative inicializado (peso: 0.10)
+2025-05-28 15:39:02,640 - src.models.teams.total_points.model_total_points - INFO - Optimizacion: 4 modelos vs 7 totales
+2025-05-28 15:39:03,844 - src.models.teams.total_points.model_total_points - INFO - Fold 4 - MAE: 4.756, Acc: 46.9%, R²: 0.847
+2025-05-28 15:39:03,844 - src.models.teams.total_points.model_total_points - INFO - 
+--- FOLD 5/7 ---
+2025-05-28 15:39:03,844 - src.models.teams.total_points.model_total_points - INFO - Entrenamiento: 2023-10-24T00:00:00.000000000 a 2024-12-04T00:00:00.000000000
+2025-05-28 15:39:03,846 - src.models.teams.total_points.model_total_points - INFO - Validación: 2024-12-04T00:00:00.000000000 a 2025-01-23T00:00:00.000000000
+2025-05-28 15:39:03,849 - src.models.teams.total_points.model_total_points - INFO - Entrenando solo 4 modelos activos en lugar de todos los modelos
+2025-05-28 15:39:03,849 - src.models.teams.total_points.model_total_points - INFO - Modelos activos: ['extra_trees_primary', 'gradient_boost_primary', 'random_forest_primary', 'ridge_ultra_conservative']
+2025-05-28 15:39:03,849 - src.models.teams.total_points.model_total_points - INFO - Modelo extra_trees_primary inicializado (peso: 0.35)
+2025-05-28 15:39:03,849 - src.models.teams.total_points.model_total_points - INFO - Modelo gradient_boost_primary inicializado (peso: 0.30)
+2025-05-28 15:39:03,850 - src.models.teams.total_points.model_total_points - INFO - Modelo random_forest_primary inicializado (peso: 0.25)
+2025-05-28 15:39:03,850 - src.models.teams.total_points.model_total_points - INFO - Modelo ridge_ultra_conservative inicializado (peso: 0.10)
+2025-05-28 15:39:03,850 - src.models.teams.total_points.model_total_points - INFO - Optimizacion: 4 modelos vs 7 totales
+2025-05-28 15:39:05,304 - src.models.teams.total_points.model_total_points - INFO - Fold 5 - MAE: 4.695, Acc: 47.2%, R²: 0.833
+2025-05-28 15:39:05,305 - src.models.teams.total_points.model_total_points - INFO - 
+--- FOLD 6/7 ---
+2025-05-28 15:39:05,305 - src.models.teams.total_points.model_total_points - INFO - Entrenamiento: 2023-10-24T00:00:00.000000000 a 2025-01-23T00:00:00.000000000
+2025-05-28 15:39:05,305 - src.models.teams.total_points.model_total_points - INFO - Validación: 2025-01-23T00:00:00.000000000 a 2025-03-12T00:00:00.000000000
+2025-05-28 15:39:05,309 - src.models.teams.total_points.model_total_points - INFO - Entrenando solo 4 modelos activos en lugar de todos los modelos
+2025-05-28 15:39:05,309 - src.models.teams.total_points.model_total_points - INFO - Modelos activos: ['extra_trees_primary', 'gradient_boost_primary', 'random_forest_primary', 'ridge_ultra_conservative']
+2025-05-28 15:39:05,310 - src.models.teams.total_points.model_total_points - INFO - Modelo extra_trees_primary inicializado (peso: 0.35)
+2025-05-28 15:39:05,310 - src.models.teams.total_points.model_total_points - INFO - Modelo gradient_boost_primary inicializado (peso: 0.30)
+2025-05-28 15:39:05,311 - src.models.teams.total_points.model_total_points - INFO - Modelo random_forest_primary inicializado (peso: 0.25)
+2025-05-28 15:39:05,311 - src.models.teams.total_points.model_total_points - INFO - Modelo ridge_ultra_conservative inicializado (peso: 0.10)
+2025-05-28 15:39:05,311 - src.models.teams.total_points.model_total_points - INFO - Optimizacion: 4 modelos vs 7 totales
+2025-05-28 15:39:06,911 - src.models.teams.total_points.model_total_points - INFO - Fold 6 - MAE: 5.775, Acc: 48.7%, R²: 0.750
+2025-05-28 15:39:06,911 - src.models.teams.total_points.model_total_points - INFO - 
+--- FOLD 7/7 ---
+2025-05-28 15:39:06,911 - src.models.teams.total_points.model_total_points - INFO - Entrenamiento: 2023-10-24T00:00:00.000000000 a 2025-03-12T00:00:00.000000000
+2025-05-28 15:39:06,911 - src.models.teams.total_points.model_total_points - INFO - Validación: 2025-03-12T00:00:00.000000000 a 2025-05-24T00:00:00.000000000
+2025-05-28 15:39:06,916 - src.models.teams.total_points.model_total_points - INFO - Entrenando solo 4 modelos activos en lugar de todos los modelos
+2025-05-28 15:39:06,916 - src.models.teams.total_points.model_total_points - INFO - Modelos activos: ['extra_trees_primary', 'gradient_boost_primary', 'random_forest_primary', 'ridge_ultra_conservative']
+2025-05-28 15:39:06,916 - src.models.teams.total_points.model_total_points - INFO - Modelo extra_trees_primary inicializado (peso: 0.35)
+2025-05-28 15:39:06,916 - src.models.teams.total_points.model_total_points - INFO - Modelo gradient_boost_primary inicializado (peso: 0.30)
+2025-05-28 15:39:06,916 - src.models.teams.total_points.model_total_points - INFO - Modelo random_forest_primary inicializado (peso: 0.25)
+2025-05-28 15:39:06,920 - src.models.teams.total_points.model_total_points - INFO - Modelo ridge_ultra_conservative inicializado (peso: 0.10)
+2025-05-28 15:39:06,920 - src.models.teams.total_points.model_total_points - INFO - Optimizacion: 4 modelos vs 7 totales
+2025-05-28 15:39:08,757 - src.models.teams.total_points.model_total_points - INFO - Fold 7 - MAE: 4.848, Acc: 48.9%, R²: 0.817
+2025-05-28 15:39:08,758 - src.models.teams.total_points.model_total_points - INFO - 
+Entrenando modelo final con regularización extrema...
+2025-05-28 15:39:08,762 - src.models.teams.total_points.model_total_points - INFO - Entrenando modelos base con regularización extrema...
+2025-05-28 15:39:08,762 - src.models.teams.total_points.model_total_points - INFO - Entrenando extra_trees_primary...
+2025-05-28 15:39:09,049 - src.models.teams.total_points.model_total_points - INFO - extra_trees_primary - Train MAE: 4.552, Val MAE: 4.713, Val Acc: 38.1%
+2025-05-28 15:39:09,049 - src.models.teams.total_points.model_total_points - INFO - Entrenando gradient_boost_primary...
+2025-05-28 15:39:09,617 - src.models.teams.total_points.model_total_points - INFO - gradient_boost_primary - Train MAE: 7.650, Val MAE: 7.514, Val Acc: 22.6%
+2025-05-28 15:39:09,617 - src.models.teams.total_points.model_total_points - INFO - Entrenando random_forest_primary...
+2025-05-28 15:39:10,728 - src.models.teams.total_points.model_total_points - INFO - random_forest_primary - Train MAE: 3.294, Val MAE: 3.749, Val Acc: 49.6%
+2025-05-28 15:39:10,729 - src.models.teams.total_points.model_total_points - INFO - Entrenando ridge_ultra_conservative...
+2025-05-28 15:39:10,733 - src.models.teams.total_points.model_total_points - INFO - ridge_ultra_conservative - Train MAE: 1.963, Val MAE: 1.804, Val Acc: 87.8%
+2025-05-28 15:39:10,733 - src.models.teams.total_points.model_total_points - INFO - Modelo extra_trees_primary: peso = 0.300
+2025-05-28 15:39:10,734 - src.models.teams.total_points.model_total_points - INFO - Modelo gradient_boost_primary: peso = 0.150
+2025-05-28 15:39:10,734 - src.models.teams.total_points.model_total_points - INFO - Modelo random_forest_primary: peso = 0.350
+2025-05-28 15:39:10,735 - src.models.teams.total_points.model_total_points - INFO - Modelo ridge_ultra_conservative: peso = 0.200
+2025-05-28 15:39:10,737 - src.models.teams.total_points.model_total_points - INFO - extra_trees_primary - Val MAE: 4.713, Val R²: 0.879, Val Acc: 45.6%
+2025-05-28 15:39:10,739 - src.models.teams.total_points.model_total_points - INFO - gradient_boost_primary - Val MAE: 7.514, Val R²: 0.741, Val Acc: 28.2%
+2025-05-28 15:39:10,740 - src.models.teams.total_points.model_total_points - INFO - random_forest_primary - Val MAE: 3.749, Val R²: 0.907, Val Acc: 56.2%
+2025-05-28 15:39:10,741 - src.models.teams.total_points.model_total_points - INFO - ridge_ultra_conservative - Val MAE: 1.804, Val R²: 0.936, Val Acc: 87.7%
+2025-05-28 15:39:10,742 - src.models.teams.total_points.model_total_points - INFO - Modelo ridge_ultra_conservative: peso = 1.000
+2025-05-28 15:39:11,039 - src.models.teams.total_points.model_total_points - INFO - Modelo guardado en: trained_models\total_points_teams.joblib
+2025-05-28 15:39:12,027 - __main__ - INFO - Generando predicciones para análisis...
+2025-05-28 15:39:12,028 - __main__ - INFO - Generando análisis gráfico completo...
+2025-05-28 15:39:12,202 - __main__ - INFO - Generando matriz de correlación...
+2025-05-28 15:39:27,913 - __main__ - INFO - Analizando correlaciones entre features...
+2025-05-28 15:39:33,480 - __main__ - INFO - Realizando prueba de predicción...
+2025-05-28 15:39:35,017 - src.models.teams.total_points.model_total_points - INFO - Predicción MIN vs OKC: 220.9 puntos (confianza: 70.0%)

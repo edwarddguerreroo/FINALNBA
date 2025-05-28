@@ -25,7 +25,7 @@ class TotalPointsFeatureEngine:
         PIPELINE COMPLETO DE FEATURES PARA 97% PRECISIÓN - OPTIMIZADO
         Genera todas las características necesarias sin duplicaciones
         """
-        print("🔬 Generando features NBA específicas OPTIMIZADAS...")
+        print("Generando features NBA específicas OPTIMIZADAS...")
         
         # Crear copia para evitar modificar datos originales
         df = teams_data.copy()
@@ -67,7 +67,7 @@ class TotalPointsFeatureEngine:
         CÁLCULOS BASE - Una sola vez para evitar duplicaciones
         Todos los cálculos fundamentales que se reutilizan
         """
-        print("📊 Calculando métricas base NBA...")
+        print("Calculando métricas base NBA...")
         
         # ==================== CÁLCULOS TEMPORALES BASE ====================
         if 'Date' in df.columns:
@@ -165,8 +165,8 @@ class TotalPointsFeatureEngine:
         for window in windows:
             # Puntos anotados y permitidos
             df[f'pts_avg_{window}g'] = df.groupby('Team')['PTS'].transform(
-                lambda x: x.rolling(window=window, min_periods=1).mean().shift(1)
-            )
+                    lambda x: x.rolling(window=window, min_periods=1).mean().shift(1)
+                )
             df[f'pts_allowed_avg_{window}g'] = df.groupby('Team')['PTS_Opp'].transform(
                 lambda x: x.rolling(window=window, min_periods=1).mean().shift(1)
             )
@@ -362,7 +362,7 @@ class TotalPointsFeatureEngine:
         FILTRO DE CORRELACIÓN OPTIMIZADO PARA ELIMINAR MULTICOLINEALIDAD
         Elimina específicamente features con correlación >0.95
         """
-        print(f"\n🔍 APLICANDO FILTRO ANTI-MULTICOLINEALIDAD (>{correlation_threshold*100}%)")
+        print(f"\nAPLICANDO FILTRO ANTI-MULTICOLINEALIDAD (>{correlation_threshold*100}%)")
         
         # Identificar columnas de features (excluir metadatos)
         exclude_cols = ['Team', 'TEAM', 'Date', 'Opp', 'PTS', 'PTS_Opp', 'total_score', 'total_points']
@@ -458,7 +458,7 @@ class TotalPointsFeatureEngine:
                         high_corr_pairs.append((to_keep, to_remove, corr_val))
             
             if high_corr_pairs:
-                print(f"🚨 MULTICOLINEALIDAD ALTA DETECTADA (>{correlation_threshold_strict}):")
+                print(f"MULTICOLINEALIDAD ALTA DETECTADA (>{correlation_threshold_strict}):")
                 for keep, remove, corr_val in high_corr_pairs:
                     print(f"   • {remove} eliminada (corr con {keep}: {corr_val:.3f})")
             
@@ -472,7 +472,7 @@ class TotalPointsFeatureEngine:
             final_features_with_corr = [(col, target_correlations[col]) for col in final_features]
             final_features_with_corr.sort(key=lambda x: x[1], reverse=True)
             final_features = [col for col, _ in final_features_with_corr[:max_features]]
-            print(f"🎯 Seleccionadas TOP {max_features} features por correlación con target")
+            print(f"Seleccionadas TOP {max_features} features por correlacion con target")
         
         # Crear dataframe filtrado
         essential_cols = ['Team', 'TEAM', 'Date', 'Opp', 'PTS', 'PTS_Opp']
@@ -485,8 +485,8 @@ class TotalPointsFeatureEngine:
         df_filtered = df[cols_to_keep].copy()
         self.feature_columns = final_features
         
-        print(f"✅ Features finales sin multicolinealidad: {len(final_features)}")
-        print(f"📊 Reducción total: {((len(feature_cols) - len(final_features)) / len(feature_cols) * 100):.1f}%")
+        print(f"Features finales sin multicolinealidad: {len(final_features)}")
+        print(f"Reduccion total: {((len(feature_cols) - len(final_features)) / len(feature_cols) * 100):.1f}%")
         
         # Limpiar target temporal
         if target_col == 'temp_total_points' and 'temp_total_points' in df_filtered.columns:
@@ -568,7 +568,7 @@ class TotalPointsFeatureEngine:
                 
                 team1_features.append(team1_val)
                 team2_features.append(team2_val)
-            
+                        
             # Combinar features de forma inteligente
             combined_features = []
             for i, feature_name in enumerate(self.feature_columns):
@@ -595,7 +595,7 @@ class TotalPointsFeatureEngine:
             return combined_features.reshape(1, -1)
         
         except Exception as e:
-            print(f"❌ Error en prepare_prediction_features: {e}")
+            print(f"Error en prepare_prediction_features: {e}")
             # Retornar features por defecto
             default_features = np.zeros((1, len(self.feature_columns)))
             return default_features
@@ -647,4 +647,4 @@ class TotalPointsFeatureEngine:
                 feature_cols.append(col)
         
         self.feature_columns = feature_cols
-        print(f"📊 Features disponibles actualizadas: {len(feature_cols)} columnas")
+        print(f"Features disponibles actualizadas: {len(feature_cols)} columnas")

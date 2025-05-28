@@ -25,6 +25,7 @@ import sys
 from tqdm import tqdm
 import os
 from datetime import datetime
+import copy
 
 warnings.filterwarnings('ignore')
 # Silenciar warnings específicos de sklearn para LightGBM
@@ -33,6 +34,135 @@ warnings.filterwarnings('ignore', category=UserWarning, module='sklearn')
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+class EarlyStoppingWithCheckpoint:
+    """
+    EARLY STOPPING AVANZADO CON CHECKPOINT AUTOMÁTICO
+    Implementa múltiples criterios de parada y guarda automáticamente el mejor modelo
+    """
+    
+    def __init__(self, patience: int = 15, min_delta: float = 1e-6, 
+                 restore_best_weights: bool = True, mode: str = 'min',
+                 monitor_overfitting: bool = True, overfitting_threshold: float = 0.1):
+        """
+        Args:
+            patience: Número de épocas sin mejora antes de parar
+            min_delta: Mejora mínima para considerar como progreso
+            restore_best_weights: Si restaurar los mejores pesos al final
+            mode: 'min' para minimizar, 'max' para maximizar
+            monitor_overfitting: Si monitorear overfitting (train_loss << val_loss)
+            overfitting_threshold: Umbral para detectar overfitting
+        """
+        self.patience = patience
+        self.min_delta = min_delta
+        self.restore_best_weights = restore_best_weights
+        self.mode = mode
+        self.monitor_overfitting = monitor_overfitting
+        self.overfitting_threshold = overfitting_threshold
+        
+        # Estado interno
+        self.best_value = float('inf') if mode == 'min' else float('-inf')
+        self.best_epoch = 0
+        self.best_weights = None
+        self.wait = 0
+        self.stopped_epoch = 0
+        self.should_stop = False
+        self.stop_reason = ""
+        
+        # Histórico para análisis de tendencias
+        self.history = {'val_loss': [], 'train_loss': []}
+        
+    def __call__(self, val_loss: float, train_loss: float, model: nn.Module, epoch: int) -> bool:
+        """
+        Evalúa si debe parar el entrenamiento y guarda checkpoint si hay mejora
+        
+        Args:
+            val_loss: Pérdida de validación actual
+            train_loss: Pérdida de entrenamiento actual
+            model: Modelo para guardar checkpoint
+            epoch: Época actual
+            
+        Returns:
+            True si debe parar el entrenamiento
+        """
+        # Actualizar histórico
+        self.history['val_loss'].append(val_loss)
+        self.history['train_loss'].append(train_loss)
+        
+        # Evaluar si hay mejora
+        current_value = val_loss
+        
+        if self.mode == 'min':
+            improved = current_value < (self.best_value - self.min_delta)
+        else:
+            improved = current_value > (self.best_value + self.min_delta)
+        
+        if improved:
+            # CHECKPOINT: Guardar mejor modelo
+            self.best_value = current_value
+            self.best_epoch = epoch
+            self.best_weights = copy.deepcopy(model.state_dict())
+            self.wait = 0
+            logger.debug(f"Época {epoch}: Nuevo mejor modelo guardado (val_loss: {val_loss:.6f})")
+        else:
+            self.wait += 1
+        
+        # CRITERIO 1: Paciencia estándar
+        if self.wait >= self.patience:
+            self.should_stop = True
+            self.stopped_epoch = epoch
+            self.stop_reason = f"Paciencia agotada ({self.patience} épocas sin mejora)"
+            
+        # CRITERIO 2: Detección de overfitting severo
+        if self.monitor_overfitting and len(self.history['val_loss']) >= 5:
+            recent_train_losses = self.history['train_loss'][-5:]
+            recent_val_losses = self.history['val_loss'][-5:]
+            
+            avg_train_loss = np.mean(recent_train_losses)
+            avg_val_loss = np.mean(recent_val_losses)
+            
+            # Si train_loss es significativamente menor que val_loss
+            overfitting_ratio = (avg_val_loss - avg_train_loss) / (avg_train_loss + 1e-8)
+            
+            if overfitting_ratio > self.overfitting_threshold and epoch > 10:
+                self.should_stop = True
+                self.stopped_epoch = epoch
+                self.stop_reason = f"Overfitting detectado (ratio: {overfitting_ratio:.3f})"
+        
+        # CRITERIO 3: Pérdida de validación aumentando consistentemente
+        if len(self.history['val_loss']) >= 10:
+            recent_losses = self.history['val_loss'][-10:]
+            if len(recent_losses) >= 8:
+                # Verificar si las últimas 8 épocas muestran tendencia creciente
+                increasing_trend = sum([recent_losses[i] > recent_losses[i-1] 
+                                      for i in range(1, 8)]) >= 6
+                if increasing_trend and epoch > 15:
+                    self.should_stop = True
+                    self.stopped_epoch = epoch
+                    self.stop_reason = "Tendencia creciente en pérdida de validación"
+        
+        return self.should_stop
+    
+    def restore_best_model(self, model: nn.Module) -> None:
+        """Restaura el mejor modelo guardado"""
+        if self.restore_best_weights and self.best_weights is not None:
+            model.load_state_dict(self.best_weights)
+            logger.info(f"Mejor modelo restaurado (época {self.best_epoch}, val_loss: {self.best_value:.6f})")
+            logger.info(f"Razón de parada: {self.stop_reason}")
+        else:
+            logger.warning("No se pudo restaurar el mejor modelo")
+    
+    def get_summary(self) -> Dict:
+        """Retorna resumen del early stopping"""
+        return {
+            'stopped': self.should_stop,
+            'stopped_epoch': self.stopped_epoch,
+            'best_epoch': self.best_epoch,
+            'best_value': self.best_value,
+            'stop_reason': self.stop_reason,
+            'total_wait': self.wait,
+            'epochs_trained': len(self.history['val_loss'])
+        }
 
 class OptimizationProgressCallback:
     """Callback para mostrar progreso de optimización con barra"""
@@ -114,6 +244,242 @@ class AdvancedNeuralNetwork(nn.Module):
         # Aplicar límites más estrictos NBA
         return torch.clamp(output, 200, 250)  # Rango más estrecho
 
+class DataValidator:
+    """
+    VALIDADOR DE DATOS ROBUSTO
+    Asegura que no pasen NaNs, Infs o datos problemáticos a los modelos
+    """
+    
+    @staticmethod
+    def clean_and_validate_data(X: np.ndarray, y: np.ndarray, 
+                               model_name: str = "unknown") -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """
+        LIMPIEZA Y VALIDACIÓN ROBUSTA DE DATOS
+        
+        Args:
+            X: Features de entrada
+            y: Target
+            model_name: Nombre del modelo para logging
+            
+        Returns:
+            X_clean, y_clean, valid_mask
+        """
+        try:
+            # Convertir a arrays NumPy si no lo son
+            if not isinstance(X, np.ndarray):
+                X = np.asarray(X, dtype=np.float32)
+            if not isinstance(y, np.ndarray):
+                y = np.asarray(y, dtype=np.float32)
+            
+            original_size = len(X)
+            
+            # PASO 1: Detectar valores problemáticos
+            # NaNs en features
+            nan_mask_X = np.isnan(X).any(axis=1)
+            # Infinitos en features
+            inf_mask_X = np.isinf(X).any(axis=1)
+            # NaNs en target
+            nan_mask_y = np.isnan(y)
+            # Infinitos en target
+            inf_mask_y = np.isinf(y)
+            # Target fuera de rango NBA (muy importante para nuestro dominio)
+            range_mask_y = (y < 150) | (y > 350)
+            
+            # Crear máscara de datos válidos
+            valid_mask = ~(nan_mask_X | inf_mask_X | nan_mask_y | inf_mask_y | range_mask_y)
+            
+            # PASO 2: Reportar problemas encontrados
+            n_nan_X = np.sum(nan_mask_X)
+            n_inf_X = np.sum(inf_mask_X)
+            n_nan_y = np.sum(nan_mask_y)
+            n_inf_y = np.sum(inf_mask_y)
+            n_range_y = np.sum(range_mask_y)
+            n_valid = np.sum(valid_mask)
+            
+            if n_nan_X > 0:
+                logger.warning(f"{model_name}: {n_nan_X} filas con NaN en features eliminadas")
+            if n_inf_X > 0:
+                logger.warning(f"{model_name}: {n_inf_X} filas con Inf en features eliminadas")
+            if n_nan_y > 0:
+                logger.warning(f"{model_name}: {n_nan_y} filas con NaN en target eliminadas")
+            if n_inf_y > 0:
+                logger.warning(f"{model_name}: {n_inf_y} filas con Inf en target eliminadas")
+            if n_range_y > 0:
+                logger.warning(f"{model_name}: {n_range_y} filas con target fuera de rango NBA eliminadas")
+            
+            # PASO 3: Validar que quedan suficientes datos
+            if n_valid < 10:
+                raise ValueError(f"{model_name}: Muy pocos datos válidos ({n_valid}) después de limpieza")
+            
+            retention_rate = n_valid / original_size
+            if retention_rate < 0.5:
+                logger.warning(f"{model_name}: Baja retención de datos ({retention_rate:.1%})")
+            
+            # PASO 4: Aplicar máscara y limpiar datos restantes
+            X_clean = X[valid_mask]
+            y_clean = y[valid_mask]
+            
+            # PASO 5: Limpieza adicional de outliers extremos en features
+            X_clean = DataValidator._clean_feature_outliers(X_clean, model_name)
+            
+            # PASO 6: Validación final
+            assert not np.any(np.isnan(X_clean)), f"{model_name}: NaNs detectados después de limpieza en X"
+            assert not np.any(np.isinf(X_clean)), f"{model_name}: Infs detectados después de limpieza en X"
+            assert not np.any(np.isnan(y_clean)), f"{model_name}: NaNs detectados después de limpieza en y"
+            assert not np.any(np.isinf(y_clean)), f"{model_name}: Infs detectados después de limpieza en y"
+            
+            logger.debug(f"{model_name}: Datos validados - {len(X_clean)} muestras limpias de {original_size} originales")
+            
+            return X_clean, y_clean, valid_mask
+            
+        except Exception as e:
+            logger.error(f"Error en validación de datos para {model_name}: {e}")
+            raise
+    
+    @staticmethod
+    def _clean_feature_outliers(X: np.ndarray, model_name: str, 
+                               method: str = 'iqr', factor: float = 3.0) -> np.ndarray:
+        """
+        LIMPIEZA DE OUTLIERS EN FEATURES
+        
+        Args:
+            X: Features array
+            model_name: Nombre del modelo
+            method: 'iqr' o 'zscore'
+            factor: Factor multiplicativo para el umbral
+        """
+        try:
+            X_clean = X.copy()
+            n_features = X.shape[1]
+            
+            if method == 'iqr':
+                # Método IQR (Interquartile Range)
+                for col in range(n_features):
+                    Q1 = np.percentile(X_clean[:, col], 25)
+                    Q3 = np.percentile(X_clean[:, col], 75)
+                    IQR = Q3 - Q1
+                    lower_bound = Q1 - factor * IQR
+                    upper_bound = Q3 + factor * IQR
+                    
+                    # Recortar valores extremos
+                    X_clean[:, col] = np.clip(X_clean[:, col], lower_bound, upper_bound)
+            
+            elif method == 'zscore':
+                # Método Z-score
+                for col in range(n_features):
+                    mean = np.mean(X_clean[:, col])
+                    std = np.std(X_clean[:, col])
+                    z_scores = np.abs((X_clean[:, col] - mean) / (std + 1e-8))
+                    
+                    # Recortar valores con z-score > factor
+                    outlier_mask = z_scores > factor
+                    if np.any(outlier_mask):
+                        # Reemplazar outliers con valores en el límite
+                        limit_value = mean + np.sign(X_clean[:, col] - mean) * factor * std
+                        X_clean[outlier_mask, col] = limit_value[outlier_mask]
+            
+            return X_clean
+            
+        except Exception as e:
+            logger.warning(f"Error limpiando outliers para {model_name}: {e}")
+            return X  # Retornar datos originales si falla la limpieza
+    
+    @staticmethod
+    def validate_prediction_input(X: np.ndarray, feature_names: List[str] = None) -> np.ndarray:
+        """
+        VALIDACIÓN ESPECÍFICA PARA PREDICCIONES
+        
+        Args:
+            X: Array de features para predicción
+            feature_names: Nombres de features (opcional)
+            
+        Returns:
+            X_validated: Array validado y limpio
+        """
+        try:
+            if not isinstance(X, np.ndarray):
+                X = np.asarray(X, dtype=np.float32)
+            
+            # Verificar dimensiones
+            if X.ndim != 2:
+                raise ValueError(f"X debe ser 2D, recibido: {X.ndim}D")
+            
+            if X.shape[0] == 0:
+                raise ValueError("X no puede estar vacío")
+            
+            # Detectar y corregir NaNs/Infs
+            nan_mask = np.isnan(X)
+            inf_mask = np.isinf(X)
+            
+            if np.any(nan_mask):
+                n_nans = np.sum(nan_mask)
+                logger.warning(f"Predicción: {n_nans} valores NaN detectados y corregidos")
+                X = np.where(nan_mask, 0.0, X)  # Reemplazar NaNs con 0
+            
+            if np.any(inf_mask):
+                n_infs = np.sum(inf_mask)
+                logger.warning(f"Predicción: {n_infs} valores Inf detectados y corregidos")
+                # Reemplazar Infs con valores límite
+                X = np.where(inf_mask & (X > 0), 1000.0, X)  # +Inf -> 1000
+                X = np.where(inf_mask & (X < 0), -1000.0, X)  # -Inf -> -1000
+            
+            # Verificar rango de features
+            if np.any(np.abs(X) > 1e6):
+                logger.warning("Predicción: Features con valores muy grandes detectadas")
+                X = np.clip(X, -1e6, 1e6)
+            
+            return X.astype(np.float32)
+            
+        except Exception as e:
+            logger.error(f"Error validando input de predicción: {e}")
+            raise
+    
+    @staticmethod
+    def safe_feature_engineering(df: pd.DataFrame) -> pd.DataFrame:
+        """
+        FEATURE ENGINEERING SEGURO CONTRA NaNs
+        Aplica transformaciones robustas que no generen NaNs
+        
+        Args:
+            df: DataFrame con features
+            
+        Returns:
+            df_safe: DataFrame con features seguras
+        """
+        try:
+            df_safe = df.copy()
+            
+            # Reemplazar NaNs antes de cualquier operación
+            numeric_cols = df_safe.select_dtypes(include=[np.number]).columns
+            
+            for col in numeric_cols:
+                if df_safe[col].isna().any():
+                    # Estrategia de reemplazo específica por tipo de feature
+                    if 'pct' in col.lower() or '%' in col:
+                        fill_value = 0.45  # Promedio NBA para porcentajes
+                    elif 'pts' in col.lower() or 'score' in col.lower():
+                        fill_value = 110   # Promedio NBA para puntos
+                    elif 'pace' in col.lower():
+                        fill_value = 100   # Pace promedio NBA
+                    else:
+                        fill_value = df_safe[col].median()
+                        if pd.isna(fill_value):
+                            fill_value = 0.0
+                    
+                    df_safe[col] = df_safe[col].fillna(fill_value)
+            
+            # Verificar que no queden NaNs
+            remaining_nans = df_safe.isna().sum().sum()
+            if remaining_nans > 0:
+                logger.warning(f"Feature engineering: {remaining_nans} NaNs restantes después de limpieza")
+                df_safe = df_safe.fillna(0.0)  # Último recurso
+            
+            return df_safe
+            
+        except Exception as e:
+            logger.error(f"Error en feature engineering seguro: {e}")
+            return df.fillna(0.0)  # Fallback ultra-conservador
+
 class NBATotalPointsPredictor:
     """
     Predictor de élite mundial para total de puntos NBA
@@ -142,13 +508,315 @@ class NBATotalPointsPredictor:
         # Métricas de rendimiento
         self.performance_metrics = {}
         
+        # CONFIGURACIÓN CENTRALIZADA DEL ENSEMBLE
+        self.ensemble_config = {
+            'model_weights': {
+                'extra_trees_primary': 0.35,
+                'gradient_boost_primary': 0.30,
+                'random_forest_primary': 0.25,
+                'ridge_ultra_conservative': 0.10
+            },
+            'prediction_limits': {
+                'min_value': 200,
+                'max_value': 250,
+                'extreme_penalty_threshold': 8.0
+            },
+            'confidence_thresholds': {
+                'min_confidence': 70,
+                'max_confidence': 95,
+                'consistency_weight': 0.7,
+                'performance_weight': 0.3
+            }
+        }
+    
+    # ==================== FUNCIONES UTILITARIAS CENTRALIZADAS ====================
+    
+    def _prepare_scaled_features(self, X_data: np.ndarray, scaler_type: str = 'standard', 
+                                fit_scaler: bool = False) -> np.ndarray:
+        """
+        FUNCIÓN UTILITARIA OPTIMIZADA: Preparación y escalado de features centralizada
+        Optimizada para trabajar exclusivamente con NumPy arrays
+        
+        Args:
+            X_data: Datos a escalar (NumPy array)
+            scaler_type: 'standard' o 'robust'
+            fit_scaler: Si ajustar el scaler (True para entrenamiento, False para predicción)
+        """
+        try:
+            if scaler_type not in self.scalers:
+                raise ValueError(f"Scaler tipo '{scaler_type}' no disponible")
+            
+            scaler = self.scalers[scaler_type]
+            
+            # OPTIMIZACIÓN: Asegurar que trabajamos con arrays NumPy contiguos
+            if not isinstance(X_data, np.ndarray):
+                X_data = np.asarray(X_data, dtype=np.float32)
+            elif not X_data.flags['C_CONTIGUOUS']:
+                X_data = np.ascontiguousarray(X_data, dtype=np.float32)
+            
+            if fit_scaler:
+                X_scaled = scaler.fit_transform(X_data)
+                logger.debug(f"Scaler {scaler_type} ajustado y aplicado")
+            else:
+                X_scaled = scaler.transform(X_data)
+                logger.debug(f"Scaler {scaler_type} aplicado")
+            
+            # OPTIMIZACIÓN: Validar resultados usando operaciones vectorizadas de NumPy
+            nan_mask = np.isnan(X_scaled)
+            inf_mask = np.isinf(X_scaled)
+            
+            if np.any(nan_mask) or np.any(inf_mask):
+                logger.warning("NaN/Inf detectado después del escalado, aplicando corrección vectorizada")
+                # Corrección vectorizada más eficiente
+                X_scaled = np.where(nan_mask, 0.0, X_scaled)
+                X_scaled = np.where(inf_mask & (X_scaled > 0), 1.0, X_scaled)
+                X_scaled = np.where(inf_mask & (X_scaled < 0), -1.0, X_scaled)
+            
+            return X_scaled.astype(np.float32)  # Asegurar tipo consistente
+            
+        except Exception as e:
+            logger.error(f"Error en escalado de features: {e}")
+            return X_data.astype(np.float32)  # Retornar datos originales como fallback
+    
+    def _get_model_appropriate_data(self, model_name: str, X_train: np.ndarray, X_val: np.ndarray,
+                                   X_train_scaled: np.ndarray, X_val_scaled: np.ndarray,
+                                   X_train_robust: np.ndarray, X_val_robust: np.ndarray,
+                                   feature_names: List[str] = None) -> Tuple[np.ndarray, np.ndarray]:
+        """
+        FUNCIÓN UTILITARIA OPTIMIZADA: Selecciona datos apropiados para cada tipo de modelo
+        Usa NumPy arrays para mejor rendimiento en secciones críticas
+        
+        Args:
+            model_name: Nombre del modelo
+            X_train, X_val: Datos originales
+            X_train_scaled, X_val_scaled: Datos escalados estándar
+            X_train_robust, X_val_robust: Datos escalados robustos
+            feature_names: Nombres de features (para modelos que los requieren)
+        """
+        try:
+            # Modelos que requieren escalado estándar
+            if any(keyword in model_name.lower() for keyword in ['ridge', 'elastic_net', 'neural']):
+                return X_train_scaled, X_val_scaled
+            
+            # Modelos que prefieren escalado robusto
+            elif any(keyword in model_name.lower() for keyword in ['lightgbm', 'catboost', 'xgboost']):
+                # OPTIMIZACIÓN: Solo crear DataFrame si es absolutamente necesario
+                # Muchos modelos de boosting funcionan bien con arrays NumPy
+                if feature_names is not None and len(feature_names) > 0:
+                    # Verificar si el modelo realmente necesita nombres de features
+                    if 'lightgbm' in model_name.lower():
+                        # LightGBM puede usar arrays NumPy directamente
+                        return X_train_robust, X_val_robust
+                    else:
+                        # Solo XGBoost y CatBoost realmente necesitan DataFrames en algunos casos
+                        X_tr = pd.DataFrame(X_train_robust, columns=feature_names)
+                        X_v = pd.DataFrame(X_val_robust, columns=feature_names)
+                        return X_tr, X_v
+                else:
+                    return X_train_robust, X_val_robust
+            
+            # Modelos que usan datos originales
+            else:
+                return X_train, X_val
+                
+        except Exception as e:
+            logger.warning(f"Error seleccionando datos para {model_name}: {e}")
+            return X_train, X_val  # Fallback a datos originales
+    
+    def _apply_prediction_limits_and_validation(self, predictions: np.ndarray, 
+                                               model_name: str = "unknown") -> np.ndarray:
+        """
+        FUNCIÓN UTILITARIA: Aplica límites y validación a predicciones
+        
+        Args:
+            predictions: Array de predicciones
+            model_name: Nombre del modelo (para logging)
+        """
+        try:
+            config = self.ensemble_config['prediction_limits']
+            
+            # Aplicar límites básicos
+            clipped_predictions = np.clip(predictions, config['min_value'], config['max_value'])
+            
+            # Contar predicciones que fueron limitadas
+            clipped_count = np.sum((predictions < config['min_value']) | (predictions > config['max_value']))
+            if clipped_count > 0:
+                logger.debug(f"Modelo {model_name}: {clipped_count} predicciones limitadas")
+            
+            # Validar que no hay NaN/Inf
+            if np.any(np.isnan(clipped_predictions)) or np.any(np.isinf(clipped_predictions)):
+                logger.warning(f"Modelo {model_name}: NaN/Inf detectado, aplicando corrección")
+                clipped_predictions = np.nan_to_num(clipped_predictions, 
+                                                   nan=220.0, posinf=config['max_value'], neginf=config['min_value'])
+            
+            return clipped_predictions
+            
+        except Exception as e:
+            logger.error(f"Error aplicando límites a predicciones de {model_name}: {e}")
+            # Fallback conservador
+            return np.full_like(predictions, 220.0)
+    
+    def _calculate_ensemble_prediction(self, base_predictions: Dict[str, np.ndarray], 
+                                     method: str = 'weighted') -> np.ndarray:
+        """
+        FUNCIÓN UTILITARIA CENTRALIZADA OPTIMIZADA: Calcula predicción del ensemble
+        Optimizada para usar operaciones vectorizadas de NumPy
+        
+        Args:
+            base_predictions: Diccionario con predicciones de cada modelo
+            method: 'weighted', 'best_models_only', 'robust_median'
+        """
+        try:
+            config = self.ensemble_config
+            model_weights = config['model_weights']
+            
+            # OPTIMIZACIÓN: Convertir a arrays NumPy una sola vez
+            pred_values = []
+            pred_weights = []
+            pred_names = []
+            
+            for model_name, predictions in base_predictions.items():
+                if model_name in model_weights:
+                    # Asegurar que predictions es un array NumPy
+                    if not isinstance(predictions, np.ndarray):
+                        predictions = np.array([predictions])
+                    
+                    pred_values.append(predictions)
+                    pred_weights.append(model_weights[model_name])
+                    pred_names.append(model_name)
+            
+            if not pred_values:
+                logger.warning("No hay predicciones válidas para el ensemble")
+                return np.array([220.0])
+            
+            # OPTIMIZACIÓN: Operaciones vectorizadas con NumPy
+            pred_array = np.vstack(pred_values)  # Shape: (n_models, n_predictions)
+            weight_array = np.array(pred_weights).reshape(-1, 1)  # Shape: (n_models, 1)
+            
+            if method == 'weighted':
+                # OPTIMIZACIÓN: Validar predicciones usando operaciones vectorizadas
+                pred_means = np.mean(pred_array, axis=1)
+                min_val, max_val = config['prediction_limits']['min_value'], config['prediction_limits']['max_value']
+                
+                # Máscara para predicciones válidas
+                valid_mask = (pred_means >= min_val) & (pred_means <= max_val)
+                
+                if np.any(valid_mask):
+                    # Usar solo predicciones válidas
+                    valid_preds = pred_array[valid_mask]
+                    valid_weights = weight_array[valid_mask]
+                    
+                    # Normalizar pesos
+                    valid_weights = valid_weights / np.sum(valid_weights)
+                    
+                    # Promedio ponderado vectorizado
+                    ensemble_pred = np.sum(valid_preds * valid_weights, axis=0)
+                else:
+                    # Fallback: promedio simple con pesos reducidos
+                    reduced_weights = weight_array * 0.3
+                    reduced_weights = reduced_weights / np.sum(reduced_weights)
+                    ensemble_pred = np.sum(pred_array * reduced_weights, axis=0)
+                    logger.debug("Usando pesos reducidos por predicciones extremas")
+            
+            elif method == 'best_models_only':
+                # Solo usar los mejores modelos
+                best_models = ['extra_trees_primary', 'gradient_boost_primary', 'random_forest_primary']
+                best_indices = [i for i, name in enumerate(pred_names) if name in best_models]
+                
+                if best_indices:
+                    best_preds = pred_array[best_indices]
+                    ensemble_pred = np.mean(best_preds, axis=0)
+                else:
+                    # Fallback a método weighted
+                    return self._calculate_ensemble_prediction(base_predictions, 'weighted')
+            
+            elif method == 'robust_median':
+                # Mediana robusta para reducir impacto de outliers
+                ensemble_pred = np.median(pred_array, axis=0)
+            
+            else:
+                raise ValueError(f"Método de ensemble desconocido: {method}")
+            
+            
+            # Aplicar límites finales
+            return self._apply_prediction_limits_and_validation(ensemble_pred, f"ensemble_{method}")
+            
+        except Exception as e:
+            logger.error(f"Error calculando ensemble con método {method}: {e}")
+            # Fallback ultra-conservador
+            n_predictions = len(next(iter(base_predictions.values()))) if base_predictions else 1
+            return np.full(n_predictions, 220.0, dtype=np.float32)
+    
+    def _calculate_prediction_confidence_unified(self, base_predictions: Dict[str, np.ndarray],
+                                               additional_predictions: List[float] = None) -> float:
+        """
+        FUNCIÓN UTILITARIA CENTRALIZADA: Calcula confianza de predicción
+        
+        Args:
+            base_predictions: Predicciones de modelos base
+            additional_predictions: Predicciones adicionales (matemática, neural, etc.)
+        """
+        try:
+            config = self.ensemble_config['confidence_thresholds']
+            
+            # Recopilar todas las predicciones válidas
+            all_predictions = []
+            
+            # Agregar predicciones de modelos base
+            for name, preds in base_predictions.items():
+                if len(preds) > 0:
+                    pred_mean = np.mean(preds)
+                    if 180 <= pred_mean <= 280:  # Rango amplio para validación
+                        all_predictions.append(pred_mean)
+            
+            # Agregar predicciones adicionales
+            if additional_predictions:
+                for pred in additional_predictions:
+                    if 180 <= pred <= 280:
+                        all_predictions.append(pred)
+            
+            if len(all_predictions) < 2:
+                return config['min_confidence']
+            
+            # Calcular métricas de consistencia
+            pred_std = np.std(all_predictions)
+            pred_mean = np.mean(all_predictions)
+            
+            # Confianza basada en consistencia (menor std = mayor confianza)
+            consistency_score = max(0, 100 - (pred_std * 8))
+            
+            # Confianza basada en rango típico NBA
+            range_score = 100
+            if not (210 <= pred_mean <= 240):
+                range_score = max(70, 100 - abs(pred_mean - 225) * 2)
+            
+            # Combinar scores
+            final_confidence = (
+                consistency_score * config['consistency_weight'] + 
+                range_score * config['performance_weight']
+            )
+            
+            # Aplicar límites configurados
+            return np.clip(final_confidence, config['min_confidence'], config['max_confidence'])
+            
+        except Exception as e:
+            logger.error(f"Error calculando confianza: {e}")
+            return config['min_confidence']
+    
     def _initialize_base_models(self, conservative_level: str = 'moderate') -> Dict:
         """
-        MODELOS BASE UNIFICADOS CON NIVELES DE CONSERVADURISMO CONFIGURABLES
+        MODELOS BASE UNIFICADOS - OPTIMIZADO PARA PRODUCCIÓN
+        Solo entrena los modelos que efectivamente se usan en el ensemble final
         
         Args:
             conservative_level: 'moderate', 'ultra_conservative', 'aggressive'
         """
+        
+        # Solo entrenar modelos que tienen peso > 0 en la configuración del ensemble
+        active_models = {name: weight for name, weight in self.ensemble_config['model_weights'].items() if weight > 0}
+        
+        logger.info(f"Entrenando solo {len(active_models)} modelos activos en lugar de todos los modelos")
+        logger.info(f"Modelos activos: {list(active_models.keys())}")
         
         # Configuraciones por nivel
         configs = {
@@ -180,9 +848,10 @@ class NBATotalPointsPredictor:
         
         config = configs.get(conservative_level, configs['moderate'])
         
-        return {
+        # Diccionario completo de modelos disponibles
+        all_models = {
             # RANDOM FOREST
-            'random_forest_primary': RandomForestRegressor(
+            'random_forest_primary': lambda: RandomForestRegressor(
                 n_estimators=config['rf_n_estimators'],
                 max_depth=config['rf_max_depth'],
                 min_samples_split=config['rf_min_samples_split'],
@@ -196,7 +865,7 @@ class NBATotalPointsPredictor:
             ),
             
             # EXTRA TREES
-            'extra_trees_primary': ExtraTreesRegressor(
+            'extra_trees_primary': lambda: ExtraTreesRegressor(
                 n_estimators=config['et_n_estimators'],
                 max_depth=config['et_max_depth'],
                 min_samples_split=config['et_min_samples_split'],
@@ -209,7 +878,7 @@ class NBATotalPointsPredictor:
             ),
             
             # GRADIENT BOOSTING
-            'gradient_boost_primary': GradientBoostingRegressor(
+            'gradient_boost_primary': lambda: GradientBoostingRegressor(
                 n_estimators=config['gb_n_estimators'],
                 learning_rate=config['gb_learning_rate'],
                 max_depth=config['gb_max_depth'],
@@ -224,7 +893,7 @@ class NBATotalPointsPredictor:
             ),
             
             # RIDGE REGRESSION
-            'ridge_ultra_conservative': Ridge(
+            'ridge_ultra_conservative': lambda: Ridge(
                 alpha=config['ridge_alpha'],
                 fit_intercept=True,
                 copy_X=True,
@@ -235,7 +904,7 @@ class NBATotalPointsPredictor:
             ),
             
             # ELASTIC NET
-            'elastic_net_ultra_conservative': ElasticNet(
+            'elastic_net_ultra_conservative': lambda: ElasticNet(
                 alpha=config['elastic_alpha'],
                 l1_ratio=0.5 if conservative_level == 'moderate' else 0.7,
                 fit_intercept=True,
@@ -250,7 +919,7 @@ class NBATotalPointsPredictor:
             ),
             
             # XGBOOST
-            'xgboost_primary': XGBRegressor(
+            'xgboost_primary': lambda: XGBRegressor(
                 n_estimators=config['xgb_n_estimators'],
                 max_depth=config['xgb_max_depth'],
                 learning_rate=config['xgb_learning_rate'],
@@ -269,7 +938,7 @@ class NBATotalPointsPredictor:
             ),
             
             # LIGHTGBM
-            'lightgbm_primary': LGBMRegressor(
+            'lightgbm_primary': lambda: LGBMRegressor(
                 n_estimators=config['lgb_n_estimators'],
                 max_depth=config['lgb_max_depth'],
                 learning_rate=config['lgb_learning_rate'],
@@ -290,6 +959,18 @@ class NBATotalPointsPredictor:
                 n_jobs=-1
             )
         }
+        
+        # Solo instanciar y retornar los modelos que se usan en el ensemble
+        active_models_dict = {}
+        for model_name in active_models.keys():
+            if model_name in all_models:
+                active_models_dict[model_name] = all_models[model_name]()
+                logger.info(f"Modelo {model_name} inicializado (peso: {active_models[model_name]:.2f})")
+            else:
+                logger.warning(f"Modelo {model_name} no encontrado en definiciones")
+        
+        logger.info(f"Optimizacion: {len(active_models_dict)} modelos vs {len(all_models)} totales")
+        return active_models_dict
     
     def _optimize_hyperparameters(self, X_train: np.ndarray, y_train: np.ndarray) -> Dict:
         """Optimización bayesiana con regularización agresiva para evitar overfitting"""
@@ -508,7 +1189,7 @@ class NBATotalPointsPredictor:
         return config
     
     def _train_neural_network_unified(self, X_train: np.ndarray, y_train: np.ndarray, 
-                                     X_val: np.ndarray, y_val: np.ndarray,
+                            X_val: np.ndarray, y_val: np.ndarray,
                                      model: AdvancedNeuralNetwork = None,
                                      regularization_level: str = 'moderate',
                                      hidden_sizes: List[int] = None, 
@@ -517,7 +1198,7 @@ class NBATotalPointsPredictor:
                                      batch_size: int = None,
                                      weight_decay: float = None) -> AdvancedNeuralNetwork:
         """
-        ENTRENAMIENTO UNIFICADO DE REDES NEURONALES
+        ENTRENAMIENTO UNIFICADO DE REDES NEURONALES - OPTIMIZADO CON VALIDACIÓN ROBUSTA
         
         Args:
             regularization_level: 'light', 'moderate', 'aggressive', 'ultra_aggressive'
@@ -525,27 +1206,48 @@ class NBATotalPointsPredictor:
             Otros parámetros: Si son None, se usan valores por defecto según regularization_level
         """
         
+        # VALIDACIÓN ROBUSTA DE DATOS ANTES DEL ENTRENAMIENTO
+        logger.info("Validando datos para entrenamiento de red neuronal...")
+        try:
+            X_train_clean, y_train_clean, train_mask = DataValidator.clean_and_validate_data(
+                X_train, y_train, "neural_network_train"
+            )
+            X_val_clean, y_val_clean, val_mask = DataValidator.clean_and_validate_data(
+                X_val, y_val, "neural_network_val"
+            )
+            
+            logger.info(f"Datos limpiados - Entrenamiento: {len(X_train_clean)}/{len(X_train)}, "
+                       f"Validación: {len(X_val_clean)}/{len(X_val)}")
+            
+        except Exception as e:
+            logger.error(f"Error en validación de datos: {e}")
+            raise ValueError(f"Datos no válidos para entrenamiento de red neuronal: {e}")
+        
         # Configuraciones por nivel de regularización
         configs = {
             'light': {
                 'dropout_rate': 0.3, 'learning_rate': 0.001, 'batch_size': 64,
                 'weight_decay': 1e-4, 'patience': 20, 'max_epochs': 500,
-                'grad_clip': 1.0, 'l1_reg': 0.0, 'l2_reg': 0.0
+                'grad_clip': 1.0, 'l1_reg': 0.0, 'l2_reg': 0.0,
+                'early_stopping_params': {'patience': 20, 'min_delta': 1e-5, 'overfitting_threshold': 0.15}
             },
             'moderate': {
                 'dropout_rate': 0.5, 'learning_rate': 0.001, 'batch_size': 32,
                 'weight_decay': 1e-3, 'patience': 15, 'max_epochs': 300,
-                'grad_clip': 1.0, 'l1_reg': 0.001, 'l2_reg': 0.001
+                'grad_clip': 1.0, 'l1_reg': 0.001, 'l2_reg': 0.001,
+                'early_stopping_params': {'patience': 15, 'min_delta': 1e-5, 'overfitting_threshold': 0.12}
             },
             'aggressive': {
                 'dropout_rate': 0.7, 'learning_rate': 0.0005, 'batch_size': 16,
                 'weight_decay': 1e-2, 'patience': 10, 'max_epochs': 200,
-                'grad_clip': 0.5, 'l1_reg': 0.01, 'l2_reg': 0.01
+                'grad_clip': 0.5, 'l1_reg': 0.01, 'l2_reg': 0.01,
+                'early_stopping_params': {'patience': 10, 'min_delta': 1e-4, 'overfitting_threshold': 0.10}
             },
             'ultra_aggressive': {
                 'dropout_rate': 0.8, 'learning_rate': 0.00005, 'batch_size': 8,
                 'weight_decay': 0.3, 'patience': 5, 'max_epochs': 50,
-                'grad_clip': 0.1, 'l1_reg': 0.001, 'l2_reg': 0.001
+                'grad_clip': 0.1, 'l1_reg': 0.001, 'l2_reg': 0.001,
+                'early_stopping_params': {'patience': 5, 'min_delta': 1e-4, 'overfitting_threshold': 0.08}
             }
         }
         
@@ -561,17 +1263,37 @@ class NBATotalPointsPredictor:
         if model is None:
             if hidden_sizes is None:
                 hidden_sizes = [32, 16] if regularization_level in ['aggressive', 'ultra_aggressive'] else [64, 32]
-            model = self._create_neural_network(X_train.shape[1], hidden_sizes, dropout_rate)
+            model = self._create_neural_network(X_train_clean.shape[1], hidden_sizes, dropout_rate)
         
-        # Convertir a tensores
-        X_train_tensor = torch.FloatTensor(X_train).to(self.device)
-        y_train_tensor = torch.FloatTensor(y_train.reshape(-1, 1)).to(self.device)
-        X_val_tensor = torch.FloatTensor(X_val).to(self.device)
-        y_val_tensor = torch.FloatTensor(y_val.reshape(-1, 1)).to(self.device)
+        # OPTIMIZACIÓN: Convertir a tensores con tipos optimizados y pin_memory
+        # Usar float32 en lugar de float64 para mejor rendimiento en GPU
+        X_train_tensor = torch.FloatTensor(X_train_clean.astype(np.float32)).to(self.device)
+        y_train_tensor = torch.FloatTensor(y_train_clean.astype(np.float32).reshape(-1, 1)).to(self.device)
+        X_val_tensor = torch.FloatTensor(X_val_clean.astype(np.float32)).to(self.device)
+        y_val_tensor = torch.FloatTensor(y_val_clean.astype(np.float32).reshape(-1, 1)).to(self.device)
         
-        # Crear datasets
+        # VALIDACIÓN FINAL DE TENSORES
+        assert not torch.any(torch.isnan(X_train_tensor)), "NaNs detectados en X_train_tensor"
+        assert not torch.any(torch.isnan(y_train_tensor)), "NaNs detectados en y_train_tensor"
+        assert not torch.any(torch.isnan(X_val_tensor)), "NaNs detectados en X_val_tensor"
+        assert not torch.any(torch.isnan(y_val_tensor)), "NaNs detectados en y_val_tensor"
+        
+        # OPTIMIZACIÓN: Crear datasets con pin_memory para transferencia GPU más rápida
         train_dataset = TensorDataset(X_train_tensor, y_train_tensor)
-        train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+        
+        # pin_memory=True solo si usamos GPU y no estamos en el mismo dispositivo
+        use_pin_memory = self.device.type == 'cuda' and not X_train_tensor.is_cuda
+        num_workers = 2 if self.device.type == 'cuda' else 0  # Workers para GPU
+        
+        train_loader = DataLoader(
+            train_dataset, 
+            batch_size=batch_size, 
+            shuffle=True,
+            pin_memory=use_pin_memory,
+            num_workers=num_workers,
+            persistent_workers=num_workers > 0,  # Mantener workers vivos
+            drop_last=True if len(train_dataset) > batch_size else False  # Evitar batches pequeños
+        )
         
         # Optimizador y scheduler
         optimizer = optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
@@ -583,13 +1305,23 @@ class NBATotalPointsPredictor:
             optimizer, patience=patience_scheduler, factor=factor, min_lr=1e-7
         )
         
+        # EARLY STOPPING AVANZADO CON CHECKPOINT
+        early_stopping = EarlyStoppingWithCheckpoint(
+            patience=config['early_stopping_params']['patience'],
+            min_delta=config['early_stopping_params']['min_delta'],
+            restore_best_weights=True,
+            mode='min',
+            monitor_overfitting=True,
+            overfitting_threshold=config['early_stopping_params']['overfitting_threshold']
+        )
+        
         # Función de pérdida
         criterion = nn.MSELoss()
         
-        # Early stopping
-        best_val_loss = float('inf')
-        patience_counter = 0
-        patience = config['patience']
+        # OPTIMIZACIÓN: Pre-calcular regularización si es necesaria
+        use_l1_l2_reg = config['l1_reg'] > 0 or config['l2_reg'] > 0
+        l1_reg_weight = config['l1_reg']
+        l2_reg_weight = config['l2_reg']
         max_epochs = config['max_epochs']
         
         model.train()
@@ -600,73 +1332,131 @@ class NBATotalPointsPredictor:
                  bar_format='{desc}: {percentage:3.0f}%|{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}] Val Loss: {postfix}') as pbar:
             
             for epoch in range(max_epochs):
-                epoch_loss = 0
+                epoch_loss = 0.0
                 batch_count = 0
                 
+                # OPTIMIZACIÓN: Usar context manager para autocast si hay GPU
+                if self.device.type == 'cuda':
+                    scaler = torch.cuda.amp.GradScaler()  # Para mixed precision
+                    
                 for batch_X, batch_y in train_loader:
+                    # VALIDACIÓN DE BATCH: Asegurar que no hay NaNs en el batch
+                    if torch.any(torch.isnan(batch_X)) or torch.any(torch.isnan(batch_y)):
+                        logger.warning(f"NaNs detectados en batch de época {epoch}, saltando...")
+                        continue
+                    
                     optimizer.zero_grad()
-                    outputs = model(batch_X)
                     
-                    # Pérdida principal
-                    loss = criterion(outputs, batch_y)
-                    
-                    # Regularización adicional según el nivel
-                    if config['l1_reg'] > 0 or config['l2_reg'] > 0:
-                        l1_reg = torch.tensor(0., device=self.device)
-                        l2_reg = torch.tensor(0., device=self.device)
-                        for param in model.parameters():
-                            l1_reg += torch.norm(param, 1)
-                            l2_reg += torch.norm(param, 2)
+                    # OPTIMIZACIÓN: Mixed precision training en GPU
+                    if self.device.type == 'cuda':
+                        with torch.cuda.amp.autocast():
+                            outputs = model(batch_X)
+                            
+                            # Validar outputs antes de calcular pérdida
+                            if torch.any(torch.isnan(outputs)):
+                                logger.warning(f"NaNs en outputs de época {epoch}, saltando batch...")
+                                continue
+                            
+                            loss = criterion(outputs, batch_y)
+                            
+                            # Regularización adicional según el nivel
+                            if use_l1_l2_reg:
+                                l1_reg = torch.tensor(0., device=self.device, dtype=torch.float32)
+                                l2_reg = torch.tensor(0., device=self.device, dtype=torch.float32)
+                                for param in model.parameters():
+                                    l1_reg += torch.norm(param, 1)
+                                    l2_reg += torch.norm(param, 2)
+                                
+                                loss += l1_reg_weight * l1_reg + l2_reg_weight * l2_reg
                         
-                        loss += config['l1_reg'] * l1_reg + config['l2_reg'] * l2_reg
-                    
-                    loss.backward()
-                    
-                    # Gradient clipping
-                    torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=config['grad_clip'])
-                    optimizer.step()
-                    
+                        # Validar pérdida antes de backward pass
+                        if torch.isnan(loss):
+                            logger.warning(f"NaN loss en época {epoch}, saltando batch...")
+                            continue
+                        
+                        # Backward pass con scaling
+                        scaler.scale(loss).backward()
+                        scaler.unscale_(optimizer)
+                        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=config['grad_clip'])
+                        scaler.step(optimizer)
+                        scaler.update()
+                    else:
+                        # CPU training (sin mixed precision)
+                        outputs = model(batch_X)
+                        
+                        # Validar outputs
+                        if torch.any(torch.isnan(outputs)):
+                            logger.warning(f"NaNs en outputs de época {epoch}, saltando batch...")
+                            continue
+                        
+                        loss = criterion(outputs, batch_y)
+                        
+                        # Regularización adicional según el nivel
+                        if use_l1_l2_reg:
+                            l1_reg = torch.tensor(0., device=self.device)
+                            l2_reg = torch.tensor(0., device=self.device)
+                            for param in model.parameters():
+                                l1_reg += torch.norm(param, 1)
+                                l2_reg += torch.norm(param, 2)
+                            
+                            loss += l1_reg_weight * l1_reg + l2_reg_weight * l2_reg
+                        
+                        # Validar pérdida
+                        if torch.isnan(loss):
+                            logger.warning(f"NaN loss en época {epoch}, saltando batch...")
+                            continue
+                        
+                        loss.backward()
+                        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=config['grad_clip'])
+                        optimizer.step()
+                
                     epoch_loss += loss.item()
                     batch_count += 1
                 
-                # Validación
+                # Validación optimizada
                 model.eval()
                 with torch.no_grad():
-                    val_outputs = model(X_val_tensor)
-                    val_loss = criterion(val_outputs, y_val_tensor).item()
+                    if self.device.type == 'cuda':
+                        with torch.cuda.amp.autocast():
+                            val_outputs = model(X_val_tensor)
+                            val_loss = criterion(val_outputs, y_val_tensor).item()
+                    else:
+                        val_outputs = model(X_val_tensor)
+                        val_loss = criterion(val_outputs, y_val_tensor).item()
+                
+                # Validar val_loss
+                if np.isnan(val_loss) or np.isinf(val_loss):
+                    logger.error(f"Val loss inválida en época {epoch}: {val_loss}")
+                    break
                 
                 scheduler.step(val_loss)
+                
+                # Calcular train_loss promedio
+                avg_train_loss = epoch_loss / batch_count if batch_count > 0 else float('inf')
+                
+                # EARLY STOPPING AVANZADO
+                should_stop = early_stopping(val_loss, avg_train_loss, model, epoch)
                 
                 # Actualizar barra de progreso
                 pbar.set_postfix_str(f"{val_loss:.4f}")
                 pbar.update(1)
                 
-                # Early stopping
-                if val_loss < best_val_loss:
-                    best_val_loss = val_loss
-                    patience_counter = 0
-                    best_model_state = model.state_dict().copy()
-                else:
-                    patience_counter += 1
-                
-                # Condiciones de parada
-                avg_train_loss = epoch_loss / batch_count
-                
-                # Para ultra_aggressive, parar muy temprano si hay overfitting
-                if regularization_level == 'ultra_aggressive':
-                    if patience_counter >= patience or (avg_train_loss < val_loss * 0.7 and epoch > 5):
-                        pbar.set_description(f"Entrenando NN ({regularization_level}) - Early stop")
-                        break
-                else:
-                    if patience_counter >= patience:
-                        pbar.set_description(f"Entrenando NN ({regularization_level}) - Early stop")
-                        break
+                if should_stop:
+                    pbar.set_description(f"Entrenando NN ({regularization_level}) - {early_stopping.stop_reason}")
+                    break
                 
                 model.train()
         
-        # Cargar mejor modelo
-        if 'best_model_state' in locals():
-            model.load_state_dict(best_model_state)
+        # RESTAURAR EL MEJOR MODELO AUTOMÁTICAMENTE
+        early_stopping.restore_best_model(model)
+        
+        # Obtener resumen del entrenamiento
+        summary = early_stopping.get_summary()
+        logger.info(f"Entrenamiento completado: {summary}")
+        
+        # OPTIMIZACIÓN: Limpiar cache de GPU si se usó
+        if self.device.type == 'cuda':
+            torch.cuda.empty_cache()
         
         return model
     
@@ -684,9 +1474,13 @@ class NBATotalPointsPredictor:
         """
         logger.info("Iniciando entrenamiento con VALIDACIÓN CRUZADA TEMPORAL MEJORADA...")
         
+        # VALIDACIÓN ROBUSTA DE DATOS DE ENTRADA
+        logger.info("Aplicando validación robusta a datos de entrada...")
+        teams_data_safe = DataValidator.safe_feature_engineering(teams_data)
+        
         # Crear features INDEPENDIENTES
         logger.info("Generando features independientes (sin data leakage)...")
-        df_features = self.feature_engine.create_features(teams_data)
+        df_features = self.feature_engine.create_features(teams_data_safe)
         
         # APLICAR FILTRO FINAL DE CORRELACIÓN MÁS AGRESIVO (85% en lugar de 95%)
         logger.info("Aplicando filtro final de correlación >85% para estabilidad...")
@@ -705,32 +1499,40 @@ class NBATotalPointsPredictor:
         X = df_features[feature_cols] 
         y = df_features[target_col].values
         
-        # Eliminar filas con NaN
-        valid_mask = ~(np.isnan(X).any(axis=1) | np.isnan(y))
-        X = X[valid_mask]
-        y = y[valid_mask]
+        # VALIDACIÓN ROBUSTA DE DATOS PREPARADOS
+        logger.info("Validando datos preparados para entrenamiento...")
+        X_clean, y_clean, valid_mask = DataValidator.clean_and_validate_data(
+            X.values, y, "ensemble_training"
+        )
         
-        logger.info(f"Datos de entrenamiento: {X.shape[0]} muestras, {X.shape[1]} features")
-        logger.info(f"Features independientes: {', '.join(feature_cols[:10])}...")
+        logger.info(f"Datos de entrenamiento validados: {len(X_clean)} muestras válidas de {len(X)} originales")
+        logger.info(f"Features independientes: {len(feature_cols)} features")
         
         # VALIDACIÓN CRUZADA TEMPORAL MEJORADA (7 folds para mayor robustez)
         from sklearn.model_selection import TimeSeriesSplit
         tscv = TimeSeriesSplit(n_splits=7)  # Aumentado de 5 a 7 para mayor estabilidad
         
-        # Ordenar por fecha para mantener cronología
-        df_sorted = df_features.sort_values(by='Date').reset_index(drop=True)
+        # Ordenar por fecha para mantener cronología (solo datos válidos)
+        df_features_valid = df_features[valid_mask]
+        if 'Date' in df_features_valid.columns:
+            df_sorted = df_features_valid.sort_values(by='Date').reset_index(drop=True)
+        else:
+            df_sorted = df_features_valid.reset_index(drop=True)
         
         # Recalcular X e y con orden cronológico
-        X = df_sorted[feature_cols]  # Mantener como DataFrame
-        y = df_sorted[target_col].values
+        X_final = df_sorted[feature_cols].values  # Convertir a NumPy array directamente
+        y_final = df_sorted[target_col].values
         
-        # Eliminar filas con NaN manteniendo orden cronológico
-        valid_mask = ~(X.isna().any(axis=1) | np.isnan(y))
-        X = X[valid_mask]
-        y = y[valid_mask]
-        dates = df_sorted['Date'].values[valid_mask]
+        # VALIDACIÓN FINAL ANTES DE CV
+        X_final, y_final, final_mask = DataValidator.clean_and_validate_data(
+            X_final, y_final, "final_cv_data"
+        )
         
-        logger.info(f"Rango temporal: {dates[0]} a {dates[-1]}")
+        if 'Date' in df_sorted.columns:
+            dates = df_sorted['Date'].values[final_mask]
+            logger.info(f"Rango temporal: {dates[0]} a {dates[-1]}")
+        else:
+            logger.info(f"Datos preparados para CV: {len(X_final)} muestras")
         
         # Inicializar modelos base con REGULARIZACIÓN MÁS AGRESIVA
         self.base_models = self._initialize_base_models(conservative_level='ultra_conservative')
@@ -741,11 +1543,11 @@ class NBATotalPointsPredictor:
         
         logger.info("Iniciando validación cruzada temporal (7 folds)...")
         
-        for fold, (train_idx, val_idx) in enumerate(tscv.split(X)):
+        for fold, (train_idx, val_idx) in enumerate(tscv.split(X_final)):
             logger.info(f"\n--- FOLD {fold + 1}/7 ---")
             
-            X_train_fold, X_val_fold = X.iloc[train_idx], X.iloc[val_idx]
-            y_train_fold, y_val_fold = y[train_idx], y[val_idx]
+            X_train_fold, X_val_fold = X_final[train_idx], X_final[val_idx]
+            y_train_fold, y_val_fold = y_final[train_idx], y_final[val_idx]
             
             logger.info(f"Entrenamiento: {dates[train_idx[0]]} a {dates[train_idx[-1]]}")
             logger.info(f"Validación: {dates[val_idx[0]]} a {dates[val_idx[-1]]}")
@@ -754,11 +1556,11 @@ class NBATotalPointsPredictor:
             scaler_standard = StandardScaler()
             scaler_robust = StandardScaler()
             
-            X_train_scaled = scaler_standard.fit_transform(X_train_fold.values)
-            X_val_scaled = scaler_standard.transform(X_val_fold.values)
+            X_train_scaled = scaler_standard.fit_transform(X_train_fold)
+            X_val_scaled = scaler_standard.transform(X_val_fold)
             
-            X_train_robust = scaler_robust.fit_transform(X_train_fold.values)
-            X_val_robust = scaler_robust.transform(X_val_fold.values)
+            X_train_robust = scaler_robust.fit_transform(X_train_fold)
+            X_val_robust = scaler_robust.transform(X_val_fold)
             
             # Entrenar modelos base para este fold con REGULARIZACIÓN EXTREMA
             fold_models = self._initialize_base_models(conservative_level='ultra_conservative')
@@ -769,10 +1571,21 @@ class NBATotalPointsPredictor:
                 if name in ['elastic_net_ultra_conservative', 'ridge_ultra_conservative']:
                     X_tr, X_v = X_train_scaled, X_val_scaled
                 elif name in ['xgboost_primary', 'lightgbm_primary', 'catboost_primary']:
-                    X_tr = pd.DataFrame(X_train_robust, columns=X_train_fold.columns)
-                    X_v = pd.DataFrame(X_val_robust, columns=X_val_fold.columns)
+                    X_tr = pd.DataFrame(X_train_robust, columns=feature_cols)
+                    X_v = pd.DataFrame(X_val_robust, columns=feature_cols)
                 else:
-                    X_tr, X_v = X_train_fold.values, X_val_fold.values
+                    X_tr, X_v = X_train_fold, X_val_fold  # Ya son numpy arrays
+                
+                # VALIDACIÓN ANTES DE ENTRENAR CADA MODELO
+                if hasattr(X_tr, 'values'):
+                    X_tr_array = X_tr.values
+                else:
+                    X_tr_array = X_tr
+                
+                if np.any(np.isnan(X_tr_array)) or np.any(np.isnan(y_train_fold)):
+                    logger.error(f"NaNs detectados antes de entrenar {name} en fold {fold+1}")
+                    base_predictions_val[:, i] = 220.0  # Fallback
+                    continue
                 
                 # Entrenar modelo con early stopping más agresivo
                 try:
@@ -852,19 +1665,19 @@ class NBATotalPointsPredictor:
         logger.info("\nEntrenando modelo final con regularización extrema...")
         
         # División final 85-15 para validación más estricta
-        split_idx = int(0.85 * len(X))  # Más datos para entrenamiento
-        X_train_final, X_val_final = X.iloc[:split_idx], X.iloc[split_idx:]
-        y_train_final, y_val_final = y[:split_idx], y[split_idx:]
+        split_idx = int(0.85 * len(X_final))  # Más datos para entrenamiento
+        X_train_final, X_val_final = X_final[:split_idx], X_final[split_idx:]
+        y_train_final, y_val_final = y_final[:split_idx], y_final[split_idx:]
         
         # Escalado final
-        self.scalers['standard'].fit(X_train_final.values)
-        self.scalers['robust'].fit(X_train_final.values)
+        self.scalers['standard'].fit(X_train_final)
+        self.scalers['robust'].fit(X_train_final)
         
-        X_train_scaled_final = self.scalers['standard'].transform(X_train_final.values)
-        X_val_scaled_final = self.scalers['standard'].transform(X_val_final.values)
+        X_train_scaled_final = self.scalers['standard'].transform(X_train_final)
+        X_val_scaled_final = self.scalers['standard'].transform(X_val_final)
         
-        X_train_robust_final = self.scalers['robust'].transform(X_train_final.values)
-        X_val_robust_final = self.scalers['robust'].transform(X_val_final.values)
+        X_train_robust_final = self.scalers['robust'].transform(X_train_final)
+        X_val_robust_final = self.scalers['robust'].transform(X_val_final)
         
         # Entrenar modelos base finales con REGULARIZACIÓN EXTREMA
         base_predictions_train_final = np.zeros((len(X_train_final), len(self.base_models)))
@@ -876,12 +1689,12 @@ class NBATotalPointsPredictor:
             
             # Seleccionar datos apropiados para cada modelo
             if 'lightgbm' in name or 'catboost' in name or 'xgboost' in name:
-                X_tr = pd.DataFrame(X_train_robust_final, columns=X_train_final.columns)
-                X_v = pd.DataFrame(X_val_robust_final, columns=X_val_final.columns)
+                X_tr = pd.DataFrame(X_train_robust_final, columns=feature_cols)
+                X_v = pd.DataFrame(X_val_robust_final, columns=feature_cols)
             elif 'ridge' in name or 'elastic_net' in name:
                 X_tr, X_v = X_train_scaled_final, X_val_scaled_final
             else:
-                X_tr, X_v = X_train_final.values, X_val_final.values
+                X_tr, X_v = X_train_final, X_val_final  # Ya son numpy arrays
             
             # Entrenar modelo con configuración ultra-conservadora
             try:
@@ -907,8 +1720,8 @@ class NBATotalPointsPredictor:
                 pred_val = model.predict(X_v)
                 
                 # Aplicar límites NBA estrictos
-                pred_train = np.clip(pred_train, 185, 275)
-                pred_val = np.clip(pred_val, 185, 275)
+                pred_train = np.clip(pred_train, 185, 250)
+                pred_val = np.clip(pred_val, 185, 250)
                 
                 base_predictions_train_final[:, i] = pred_train
                 base_predictions_val_final[:, i] = pred_val
@@ -1061,7 +1874,7 @@ class NBATotalPointsPredictor:
                 if weight > 0:
                     # Seleccionar datos apropiados para cada modelo
                     if 'lightgbm' in name or 'catboost' in name or 'gradient_boost' in name or 'xgboost' in name:
-                        X_tr = pd.DataFrame(X_train_robust_final, columns=X_train_final.columns)
+                        X_tr = pd.DataFrame(X_train_robust_final, columns=feature_cols)
                         pred_train = model.predict(X_tr)
                     elif 'ridge' in name or 'elastic_net' in name:
                         pred_train = model.predict(X_train_scaled_final)
@@ -1077,7 +1890,7 @@ class NBATotalPointsPredictor:
             for name, model in self.base_models.items():
                 try:
                     if 'lightgbm' in name or 'catboost' in name or 'gradient_boost' in name or 'xgboost' in name:
-                        X_tr = pd.DataFrame(X_train_robust_final, columns=X_train_final.columns)
+                        X_tr = pd.DataFrame(X_train_robust_final, columns=feature_cols)
                         pred_train = model.predict(X_tr)
                     elif 'ridge' in name or 'elastic_net' in name:
                         pred_train = model.predict(X_train_scaled_final)
@@ -1127,7 +1940,7 @@ class NBATotalPointsPredictor:
         
         # Análisis mejorado de resultados
         self._analyze_model_performance_unified(y_train_final, final_pred_train, y_val_final, ensemble_pred, 
-                                              base_predictions_train_final, base_predictions_val_final, 
+                                          base_predictions_train_final, base_predictions_val_final, 
                                               final_pred_train, ensemble_pred, cv_scores,
                                               detailed=True, stability_focus=True)
         
@@ -1310,7 +2123,7 @@ class NBATotalPointsPredictor:
     
     def _display_feature_importance(self):
         """Muestra importancia de features de forma avanzada"""
-        print(f"\n🔬 IMPORTANCIA DE FEATURES:")
+        print(f"\nIMPORTANCIA DE FEATURES:")
         
         try:
             feature_importance = self.get_feature_importance()
@@ -1332,7 +2145,7 @@ class NBATotalPointsPredictor:
                 
         except Exception as e:
             print(f"Error calculando importancia: {e}")
-    
+
     def _create_ultra_hybrid_predictor(self, df_features: pd.DataFrame, team1: str, team2: str, 
                                      base_predictions: Dict, neural_pred: float, 
                                      is_team1_home: bool = True) -> Tuple[float, float, Dict]:
@@ -1450,8 +2263,8 @@ class NBATotalPointsPredictor:
     def predict(self, team1: str, team2: str, teams_data: pd.DataFrame, 
                 is_team1_home: bool = True) -> Dict:
         """
-        PREDICCIÓN ULTRA-OPTIMIZADA PARA 97% PRECISIÓN
-        Método híbrido: Predictor directo matemático (85%) + Ensemble ML (15%)
+        PREDICCIÓN ULTRA-OPTIMIZADA PARA 97% PRECISIÓN - REFACTORIZADA
+        Método híbrido usando funciones utilitarias centralizadas
         """
         if not self.is_trained:
             raise ValueError("El modelo debe ser entrenado antes de hacer predicciones")
@@ -1462,235 +2275,293 @@ class NBATotalPointsPredictor:
         is_team1_home = bool(is_team1_home)
         
         try:
+            # 1. PREPARAR FEATURES USANDO PIPELINE CENTRALIZADO
+            df_features = self._prepare_features_for_prediction(teams_data, team1_str, team2_str)
+            if df_features is None:
+                return self._create_emergency_fallback_prediction(team1_str, team2_str)
+            
+            # 2. CREAR VECTOR DE FEATURES OPTIMIZADO
+            feature_vector = self._create_feature_vector_for_teams(df_features, team1_str, team2_str, is_team1_home)
+            if feature_vector is None:
+                return self._create_emergency_fallback_prediction(team1_str, team2_str)
+            
+            # 3. OBTENER PREDICCIONES DE MODELOS BASE USANDO FUNCIONES UTILITARIAS
+            base_predictions = self._get_base_model_predictions(feature_vector)
+            
+            # 4. CALCULAR ENSEMBLE USANDO FUNCIÓN CENTRALIZADA
+            ensemble_prediction = self._calculate_ensemble_prediction(base_predictions, method='weighted')
+            ensemble_pred_value = float(np.mean(ensemble_prediction))
+            
+            # 5. PREDICTOR MATEMÁTICO DIRECTO
+            mathematical_pred = self._create_mathematical_predictor_unified(
+                df_features, team1_str, team2_str, None, None, is_team1_home, 'comprehensive'
+            )
+            
+            # 6. COMBINACIÓN HÍBRIDA FINAL USANDO CONFIGURACIÓN CENTRALIZADA
+            final_prediction = self._combine_predictions_hybrid(
+                ensemble_pred_value, mathematical_pred, method='optimized_70_30'
+            )
+            
+            # 7. CALCULAR CONFIANZA USANDO FUNCIÓN CENTRALIZADA
+            additional_preds = [mathematical_pred, ensemble_pred_value]
+            confidence = self._calculate_prediction_confidence_unified(base_predictions, additional_preds)
+            
+            # 8. PREPARAR RESPUESTA ESTRUCTURADA
+            result = self._build_prediction_response(
+                final_prediction, confidence, base_predictions, 
+                ensemble_pred_value, mathematical_pred, team1_str, team2_str
+            )
+            
+            logger.info(f"Predicción {team1_str} vs {team2_str}: {final_prediction:.1f} puntos (confianza: {confidence:.1f}%)")
+            return result
+            
+        except Exception as e:
+            logger.error(f"Error crítico en predicción: {e}")
+            return self._create_emergency_fallback_prediction(team1_str, team2_str)
+    
+    def _prepare_features_for_prediction(self, teams_data: pd.DataFrame, team1: str, team2: str) -> pd.DataFrame:
+        """FUNCIÓN UTILITARIA: Preparar features para predicción"""
+        try:
             # Crear features para predicción
             df_features = self.feature_engine.create_features(teams_data)
             
-            # APLICAR EL MISMO FILTRO DE CORRELACIÓN QUE EN ENTRENAMIENTO
+            # Aplicar el mismo filtro de correlación que en entrenamiento
             df_features = self.feature_engine.apply_final_correlation_filter(df_features, correlation_threshold=0.85)
             
-            # CORRECCIÓN CRÍTICA: Usar 'Team' (nombre correcto del CSV)
+            # Validar que hay datos para ambos equipos
             if 'Team' not in df_features.columns:
-                logger.warning("Columna 'Team' no encontrada, usando datos más recientes")
-                # Usar las últimas filas disponibles
-                team1_data = df_features.tail(10)
-                team2_data = df_features.tail(10)
-            else:
-                # Filtrar datos específicos de los equipos
-                team1_data = df_features[df_features['Team'] == team1_str].copy()
-                team2_data = df_features[df_features['Team'] == team2_str].copy()
+                logger.warning("Columna 'Team' no encontrada")
+                return None
+            
+            team1_data = df_features[df_features['Team'] == team1]
+            team2_data = df_features[df_features['Team'] == team2]
             
             if team1_data.empty or team2_data.empty:
-                logger.warning(f"Datos insuficientes para {team1_str} vs {team2_str}")
-                return self._create_emergency_fallback_prediction(team1_str, team2_str)
+                logger.warning(f"Datos insuficientes para {team1} vs {team2}")
+                return None
             
-            # Usar las features seleccionadas durante el entrenamiento
+            return df_features
+            
+        except Exception as e:
+            logger.error(f"Error preparando features: {e}")
+            return None
+    
+    def _create_feature_vector_for_teams(self, df_features: pd.DataFrame, team1: str, team2: str, 
+                                       is_team1_home: bool) -> np.ndarray:
+        """FUNCIÓN UTILITARIA: Crear vector de features para dos equipos"""
+        try:
             feature_cols = self.feature_engine.feature_columns
             if not feature_cols:
                 logger.error("No hay features seleccionadas del entrenamiento")
-                return self._create_emergency_fallback_prediction(team1_str, team2_str)
+                return None
             
-            # Verificar que todas las features necesarias estén disponibles
+            # Verificar features disponibles
             missing_features = [col for col in feature_cols if col not in df_features.columns]
             if missing_features:
-                logger.warning(f"Features faltantes: {missing_features[:5]}...")
-                # Usar solo las features disponibles
+                logger.warning(f"Features faltantes: {len(missing_features)}")
                 available_features = [col for col in feature_cols if col in df_features.columns]
                 if len(available_features) < 10:
-                    logger.error("Muy pocas features disponibles para predicción")
-                    return self._create_emergency_fallback_prediction(team1_str, team2_str)
+                    logger.error("Muy pocas features disponibles")
+                    return None
                 feature_cols = available_features
             
-            # Preparar datos para predicción usando las features correctas
-            try:
-                # Tomar los datos más recientes de cada equipo
-                team1_recent = team1_data[feature_cols].tail(1)
-                team2_recent = team2_data[feature_cols].tail(1)
-                
-                if team1_recent.empty or team2_recent.empty:
-                    logger.warning("No hay datos recientes suficientes")
-                    return self._create_emergency_fallback_prediction(team1_str, team2_str)
-                
-                # Combinar datos para predicción (promedio de ambos equipos)
-                combined_features = (team1_recent.values + team2_recent.values) / 2
-                combined_features = combined_features.reshape(1, -1)
-                
-                # Verificar dimensionalidad
-                if combined_features.shape[1] != len(feature_cols):
-                    logger.error(f"Error de dimensionalidad: {combined_features.shape[1]} vs {len(feature_cols)}")
-                    return self._create_emergency_fallback_prediction(team1_str, team2_str)
-                
-            except Exception as e:
-                logger.error(f"Error preparando features: {e}")
-                return self._create_emergency_fallback_prediction(team1_str, team2_str)
+            # Obtener datos recientes de ambos equipos
+            team1_data = df_features[df_features['Team'] == team1]
+            team2_data = df_features[df_features['Team'] == team2]
             
-            # Obtener datos más recientes de ambos equipos
-            team1_recent = team1_data.tail(3).mean(numeric_only=True)  # Solo columnas numéricas
-            team2_recent = team2_data.tail(3).mean(numeric_only=True)  # Solo columnas numéricas
+            team1_recent = team1_data.tail(3).mean(numeric_only=True)
+            team2_recent = team2_data.tail(3).mean(numeric_only=True)
             
-            # CREAR VECTOR DE FEATURES OPTIMIZADO PARA 97%
+            # Crear vector de features combinado
             feature_vector = []
-            feature_cols = self.feature_engine.feature_columns
-            
-            # FEATURES CRÍTICAS PARA 97% PRECISIÓN
-            critical_features = [
-                'ensemble_projection_v1', 'direct_scoring_projection', 
-                'weighted_shot_volume', 'total_expected_shots', 'FG%'
-            ]
-            
-            # Combinar features de ambos equipos con pesos optimizados
             for col in feature_cols:
                 try:
                     if col in team1_recent.index and col in team2_recent.index:
                         val1 = float(team1_recent[col]) if not pd.isna(team1_recent[col]) else 0.0
                         val2 = float(team2_recent[col]) if not pd.isna(team2_recent[col]) else 0.0
                         
-                        # LÓGICA OPTIMIZADA PARA FEATURES CRÍTICAS
-                        if col in critical_features:
-                            # Para features críticas, usar suma ponderada por importancia
-                            if 'projection' in col.lower() or 'scoring' in col.lower():
-                                combined_val = val1 + val2  # Suma directa para proyecciones
-                            elif 'volume' in col.lower() or 'shots' in col.lower():
-                                combined_val = val1 + val2  # Suma para volúmenes
-                            elif '%' in col or 'pct' in col.lower():
-                                combined_val = (val1 + val2) / 2  # Promedio para porcentajes
-                            else:
-                                combined_val = val1 + val2
-                        else:
-                            # Para features regulares, usar lógica estándar
-                            if any(keyword in col.lower() for keyword in ['pts', 'score', 'total', 'projection']):
-                                combined_val = val1 + val2
-                            else:
-                                combined_val = (val1 + val2) / 2
-                        
+                        # Lógica de combinación optimizada
+                        combined_val = self._combine_team_feature_values(col, val1, val2, is_team1_home)
                         feature_vector.append(float(combined_val))
                     else:
                         # Valor por defecto basado en estadísticas NBA
-                        if 'pts' in col.lower() or 'score' in col.lower():
-                            feature_vector.append(110.0)  # Promedio NBA por equipo
-                        elif '%' in col or 'pct' in col.lower():
-                            feature_vector.append(0.45)   # Promedio NBA shooting
-                        else:
-                            feature_vector.append(0.0)
+                        default_val = self._get_default_feature_value(col)
+                        feature_vector.append(default_val)
+                        
                 except Exception as e:
                     logger.debug(f"Error procesando feature {col}: {e}")
                     feature_vector.append(0.0)
             
-            # Validar vector de features
+            # Validar vector
             if len(feature_vector) != len(feature_cols):
                 logger.error(f"Mismatch en features: esperado {len(feature_cols)}, obtenido {len(feature_vector)}")
-                return self._create_emergency_fallback_prediction(team1_str, team2_str)
+                return None
             
-            # Convertir a array numpy y validar
+            # Convertir y validar usando DataValidator
             X_pred = np.array(feature_vector, dtype=np.float64).reshape(1, -1)
             
-            # Verificar NaN/Inf
-            if np.any(np.isnan(X_pred)) or np.any(np.isinf(X_pred)):
-                logger.warning("NaN/Inf detectado en features, aplicando corrección")
-                X_pred = np.nan_to_num(X_pred, nan=0.0, posinf=1000.0, neginf=-1000.0)
+            # VALIDACIÓN ROBUSTA DEL VECTOR DE PREDICCIÓN
+            X_pred_validated = DataValidator.validate_prediction_input(X_pred, feature_cols)
             
-            # Escalar features
-            try:
-                X_pred_scaled = self.scalers['standard'].transform(X_pred)
-            except Exception as e:
-                logger.error(f"Error en escalado: {e}")
-                return self._create_emergency_fallback_prediction(team1_str, team2_str)
+            return X_pred_validated
             
-            # 1. PREDICCIONES DE MODELOS BASE OPTIMIZADAS
+        except Exception as e:
+            logger.error(f"Error creando vector de features: {e}")
+            return None
+    
+    def _combine_team_feature_values(self, feature_name: str, val1: float, val2: float, 
+                                   is_team1_home: bool) -> float:
+        """FUNCIÓN UTILITARIA: Combinar valores de features de dos equipos"""
+        # Features críticas que se suman
+        if any(keyword in feature_name.lower() for keyword in ['pts', 'score', 'total', 'projection', 'volume', 'shots']):
+            return val1 + val2
+        
+        # Porcentajes que se promedian
+        elif '%' in feature_name or 'pct' in feature_name.lower() or 'efficiency' in feature_name.lower():
+            return (val1 + val2) / 2
+        
+        # Features de ventaja local
+        elif 'home' in feature_name.lower():
+            return 1.0 if is_team1_home else 0.0
+        
+        # Otras features se promedian
+        else:
+            return (val1 + val2) / 2
+    
+    def _get_default_feature_value(self, feature_name: str) -> float:
+        """FUNCIÓN UTILITARIA: Obtener valor por defecto para features faltantes"""
+        if 'pts' in feature_name.lower() or 'score' in feature_name.lower():
+            return 110.0  # Promedio NBA por equipo
+        elif '%' in feature_name or 'pct' in feature_name.lower():
+            return 0.45   # Promedio NBA shooting
+        elif 'home' in feature_name.lower():
+            return 0.5    # Neutral
+        else:
+            return 0.0
+    
+    def _get_base_model_predictions(self, feature_vector: np.ndarray) -> Dict[str, np.ndarray]:
+        """FUNCIÓN UTILITARIA: Obtener predicciones de todos los modelos base"""
+        try:
+            # Escalar features usando función utilitaria
+            X_pred_scaled = self._prepare_scaled_features(feature_vector, 'standard', fit_scaler=False)
+            
             base_predictions = {}
-            model_weights = {
-                'extra_trees_primary': 0.35,
-                'gradient_boost_primary': 0.30,
-                'random_forest_primary': 0.25,
-                'ridge_ultra_conservative': 0.10
-            }
+            feature_names = self.feature_engine.feature_columns
             
             for model_name, model in self.base_models.items():
                 try:
-                    pred = float(model.predict(X_pred_scaled)[0])
-                    # Aplicar límites NBA más estrictos para evitar extremos
-                    pred = float(np.clip(pred, 200, 245))  # Límites más conservadores
-                    base_predictions[model_name] = pred
+                    # Seleccionar datos apropiados usando función utilitaria
+                    X_for_model, _ = self._get_model_appropriate_data(
+                        model_name, feature_vector, feature_vector,
+                        X_pred_scaled, X_pred_scaled,
+                        X_pred_scaled, X_pred_scaled,  # Usar scaled para robust también
+                        feature_names
+                    )
+                    
+                    # Hacer predicción
+                    pred = float(model.predict(X_for_model)[0])
+                    
+                    # Aplicar límites usando función utilitaria
+                    pred_array = np.array([pred])
+                    pred_limited = self._apply_prediction_limits_and_validation(pred_array, model_name)
+                    
+                    base_predictions[model_name] = pred_limited
+                    
                 except Exception as e:
                     logger.warning(f"Error en modelo {model_name}: {e}")
-                    base_predictions[model_name] = 220.0
+                    # Fallback conservador
+                    fallback_pred = np.array([220.0])
+                    base_predictions[model_name] = self._apply_prediction_limits_and_validation(fallback_pred, model_name)
             
-            # 2. ENSEMBLE OPTIMIZADO CON PESOS DINÁMICOS Y LÍMITES ESTRICTOS
-            ensemble_prediction = 0.0
-            total_weight = 0.0
+            return base_predictions
             
-            for model_name, pred in base_predictions.items():
-                weight = model_weights.get(model_name, 0.1)
-                # Aplicar límites más estrictos y penalizar predicciones extremas
-                if 205 <= pred <= 240:  # Rango más estricto
-                    ensemble_prediction += pred * weight
-                    total_weight += weight
-                else:
-                    # Reducir peso significativamente para predicciones extremas
-                    reduced_weight = weight * 0.2  # Reducción más agresiva
-                    clipped_pred = float(np.clip(pred, 205, 245))  # Límites más estrictos
-                    ensemble_prediction += clipped_pred * reduced_weight
-                    total_weight += reduced_weight
+        except Exception as e:
+            logger.error(f"Error obteniendo predicciones base: {e}")
+            # Fallback con predicciones conservadoras
+            fallback_predictions = {}
+            for model_name in self.base_models.keys():
+                fallback_predictions[model_name] = np.array([220.0])
+            return fallback_predictions
+    
+    def _combine_predictions_hybrid(self, ensemble_pred: float, mathematical_pred: float, 
+                                  method: str = 'optimized_70_30') -> float:
+        """FUNCIÓN UTILITARIA: Combinar predicciones usando diferentes métodos"""
+        try:
+            if method == 'optimized_70_30':
+                # 70% matemático + 30% ensemble ML (configuración optimizada)
+                combined = (mathematical_pred * 0.70) + (ensemble_pred * 0.30)
             
-            if total_weight > 0:
-                ensemble_prediction /= total_weight
+            elif method == 'balanced_50_50':
+                combined = (mathematical_pred * 0.50) + (ensemble_pred * 0.50)
+            
+            elif method == 'conservative_80_20':
+                # Más peso al predictor matemático
+                combined = (mathematical_pred * 0.80) + (ensemble_pred * 0.20)
+            
             else:
-                ensemble_prediction = 220.0
+                logger.warning(f"Método de combinación desconocido: {method}, usando optimized_70_30")
+                combined = (mathematical_pred * 0.70) + (ensemble_pred * 0.30)
             
-            # Aplicar límites adicionales al ensemble
-            ensemble_prediction = float(np.clip(ensemble_prediction, 200, 250))
+            # Aplicar límites usando configuración centralizada
+            config = self.ensemble_config['prediction_limits']
+            final_prediction = np.clip(combined, config['min_value'], config['max_value'])
             
-            # 3. PREDICTOR MATEMÁTICO DIRECTO (ALTA PRECISIÓN)
-            mathematical_pred = self._create_mathematical_predictor_unified(
-                df_features, team1_str, team2_str, team1_recent, team2_recent, is_team1_home
-            )
+            return float(final_prediction)
             
-            # 4. COMBINACIÓN HÍBRIDA ULTRA-OPTIMIZADA
-            # 70% matemático + 30% ensemble ML (ajustado para mayor precisión)
-            final_prediction = (mathematical_pred * 0.70) + (ensemble_prediction * 0.30)
+        except Exception as e:
+            logger.error(f"Error combinando predicciones: {e}")
+            return 220.0  # Fallback conservador
+    
+    def _build_prediction_response(self, final_prediction: float, confidence: float,
+                                 base_predictions: Dict[str, np.ndarray], ensemble_pred: float,
+                                 mathematical_pred: float, team1: str, team2: str) -> Dict:
+        """FUNCIÓN UTILITARIA: Construir respuesta estructurada de predicción"""
+        try:
+            # Convertir predicciones base a formato simple
+            individual_preds = {k: float(v[0]) if len(v) > 0 else 220.0 
+                              for k, v in base_predictions.items()}
             
-            # 5. VALIDACIÓN Y AJUSTES FINALES
-            confidence = self._calculate_prediction_confidence(
-                base_predictions, mathematical_pred, ensemble_prediction
-            )
+            # Calcular métricas de consistencia
+            all_preds = list(individual_preds.values()) + [mathematical_pred, ensemble_pred]
+            pred_std = np.std(all_preds)
+            pred_range = max(all_preds) - min(all_preds)
             
-            # Ajuste por contexto de temporada
-            season_adjustment = self._apply_season_context_adjustment(final_prediction)
-            final_prediction += season_adjustment
+            # Obtener configuración de pesos
+            model_weights = self.ensemble_config['model_weights']
             
-            # LÍMITES FINALES ABSOLUTOS NBA MÁS ESTRICTOS
-            final_prediction = float(np.clip(final_prediction, 200, 250))  # Límites más estrictos
-            confidence = float(np.clip(confidence, 70, 95))
-            
-            # 6. PREPARAR RESPUESTA COMPLETA
             result = {
                 'total_points': final_prediction,
                 'total_points_prediction': final_prediction,
                 'confidence': confidence,
-                'method': 'ultra_optimized_hybrid_97pct',
-                'individual_predictions': {k: float(v) for k, v in base_predictions.items()},
-                'neural_network_prediction': float(ensemble_prediction),
+                'method': 'ultra_optimized_hybrid_refactored',
+                'individual_predictions': individual_preds,
+                'neural_network_prediction': ensemble_pred,
                 'prediction_details': {
-                    'mathematical_prediction': float(mathematical_pred),
-                    'ensemble_prediction': float(ensemble_prediction),
-                    'season_adjustment': float(season_adjustment),
+                    'mathematical_prediction': mathematical_pred,
+                    'ensemble_prediction': ensemble_pred,
                     'model_weights': model_weights,
-                    'teams': f"{team1_str} vs {team2_str}",
+                    'teams': f"{team1} vs {team2}",
                     'confidence_factors': {
-                        'model_consistency': float(np.std(list(base_predictions.values()))),
-                        'prediction_range': float(max(base_predictions.values()) - min(base_predictions.values())),
+                        'model_consistency': pred_std,
+                        'prediction_range': pred_range,
                         'mathematical_weight': 0.70,
                         'ml_weight': 0.30
-                    }
+                    },
+                    'prediction_limits': self.ensemble_config['prediction_limits']
                 }
             }
-            
-            logger.info(f"Predicción optimizada {team1_str} vs {team2_str}: {final_prediction:.1f} puntos (confianza: {confidence:.1f}%)")
             
             return result
             
         except Exception as e:
-            logger.error(f"Error crítico en predicción: {e}")
-            return self._create_emergency_fallback_prediction(team1_str, team2_str)
+            logger.error(f"Error construyendo respuesta: {e}")
+            return {
+                'total_points': final_prediction,
+                'total_points_prediction': final_prediction,
+                'confidence': confidence,
+                'method': 'fallback_response',
+                'error': str(e)
+            }
 
     def _create_mathematical_predictor_unified(self, df_features: pd.DataFrame = None, 
                                              team1: str = None, team2: str = None,
@@ -1756,7 +2627,7 @@ class NBATotalPointsPredictor:
             else:
                 logger.warning(f"Método desconocido: {prediction_method}, usando fallback")
                 return self._fallback_prediction(df_features)
-                
+            
         except Exception as e:
             logger.error(f"Error en predictor matemático unificado: {e}")
             return 220.0
@@ -1974,8 +2845,18 @@ class NBATotalPointsPredictor:
             'neural_network_state': self.neural_network.state_dict() if self.neural_network else None
         }
         
-        joblib.dump(model_data, filepath)
-        logger.info(f"Modelo guardado en: {filepath}")
+        try:
+            joblib.dump(model_data, filepath, compress=3)
+            logger.info(f"Modelo guardado en: {filepath}")
+        except Exception as e:
+            logger.warning(f"Error guardando modelo: {e}")
+            # Intentar guardado sin compresión
+            try:
+                joblib.dump(model_data, filepath)
+                logger.info(f"Modelo guardado sin compresión en: {filepath}")
+            except Exception as e2:
+                logger.error(f"Error crítico guardando modelo: {e2}")
+                raise
     
     def load_model(self, filepath: str):
         """Carga un modelo previamente entrenado"""
@@ -2006,7 +2887,7 @@ class NBATotalPointsPredictor:
         
         try:
             feature_names = self.feature_engine.feature_columns
-            
+        
             # XGBoost Primary
             if 'xgboost_primary' in self.base_models:
                 try:
@@ -2018,7 +2899,7 @@ class NBATotalPointsPredictor:
                             'feature': feature_names[i],
                             'importance': xgb_importance[i],
                             'model': 'XGBoost'
-                        })
+                    })
                 except Exception as e:
                     print(f"Error obteniendo importancia de XGBoost: {e}")
             
@@ -2055,7 +2936,7 @@ class NBATotalPointsPredictor:
             if not importance_data:
                 print("No se pudo obtener importancia de ningún modelo")
                 return pd.DataFrame()
-            
+        
             return pd.DataFrame(importance_data)
             
         except Exception as e:
@@ -2202,9 +3083,9 @@ class NBATotalPointsPredictor:
         train_metrics = self.performance_metrics['train']
         val_metrics = self.performance_metrics['validation']
         
-        print(f"\n📊 VALIDACIÓN CRUZADA TEMPORAL (7 FOLDS):")
-        print(f"{'Métrica':<15} {'Media':<15} {'Std':<15} {'CV':<15} {'Min':<15} {'Max':<15}")
-        print("-" * 90)
+        print(f"\nVALIDACION CRUZADA TEMPORAL (7 FOLDS):")
+        print(f"{'Métrica':<15} {'Media':<15} {'Std':<15} {'Min':<15} {'Max':<15}")
+        print("-" * 75)
         
         fold_maes = [score['mae'] for score in cv_scores]
         fold_accs = [score['accuracy'] for score in cv_scores]
@@ -2221,22 +3102,22 @@ class NBATotalPointsPredictor:
         
         if stability_focus:
             # Análisis de estabilidad CV
-            print(f"\n🔍 ANÁLISIS DE ESTABILIDAD CV:")
+            print(f"\nANALISIS DE ESTABILIDAD CV:")
             if mae_cv < 0.1 and acc_cv < 0.1:
-                print("✅ EXCELENTE ESTABILIDAD - Modelo muy consistente entre folds")
+                print("EXCELENTE ESTABILIDAD - Modelo muy consistente entre folds")
             elif mae_cv < 0.2 and acc_cv < 0.2:
-                print("🟡 BUENA ESTABILIDAD - Modelo moderadamente consistente")
+                print("BUENA ESTABILIDAD - Modelo moderadamente consistente")
             else:
-                print("❌ BAJA ESTABILIDAD - Modelo inconsistente entre folds")
-            
+                print("BAJA ESTABILIDAD - Modelo inconsistente entre folds")
+        
             print(f"Coeficiente de variación MAE: {mae_cv:.3f} ({'Excelente' if mae_cv < 0.1 else 'Bueno' if mae_cv < 0.2 else 'Problemático'})")
             print(f"Coeficiente de variación Precisión: {acc_cv:.3f} ({'Excelente' if acc_cv < 0.1 else 'Bueno' if acc_cv < 0.2 else 'Problemático'})")
         
-        print(f"\n📈 DETALLES POR FOLD:")
-        for i, score in enumerate(cv_scores):
-            print(f"Fold {score['fold']}: MAE={score['mae']:.3f}, Acc={score['accuracy']:.1f}%, R²={score['r2']:.3f}, Train={score['n_train']}, Val={score['n_val']}")
+            print(f"DETALLES POR FOLD:")
+            for i, score in enumerate(cv_scores):
+                print(f"Fold {score['fold']}: MAE={score['mae']:.3f}, Acc={score['accuracy']:.1f}%, R²={score['r2']:.3f}, Train={score['n_train']}, Val={score['n_val']}")
         
-        print(f"\n📊 MÉTRICAS FINALES (Hold-out):")
+        print(f"MÉTRICAS FINALES (Hold-out):")
         print(f"{'Métrica':<15} {'Entrenamiento':<15} {'Validación':<15} {'Gap':<15} {'Gap %':<15}")
         print("-" * 75)
         
@@ -2254,34 +3135,34 @@ class NBATotalPointsPredictor:
         print(f"{'R²':<15} {train_metrics['r2']:<15.4f} {val_metrics['r2']:<15.4f} {r2_gap:<15.4f} {r2_gap_pct:<15.1f}")
         
         # Análisis de overfitting
-        print(f"\n🔍 ANÁLISIS DE OVERFITTING:")
+        print(f"\nANALISIS DE OVERFITTING:")
         if acc_gap < 2.0 and mae_gap < 0.5 and r2_gap < 0.05:
-            print("✅ SIN OVERFITTING - Excelente generalización")
+            print("SIN OVERFITTING - Excelente generalizacion")
         elif acc_gap < 5.0 and mae_gap < 1.0 and r2_gap < 0.1:
-            print("🟡 OVERFITTING LEVE - Generalización aceptable")
+            print("OVERFITTING LEVE - Generalizacion aceptable")
         else:
-            print("❌ OVERFITTING SIGNIFICATIVO - Generalización problemática")
+            print("OVERFITTING SIGNIFICATIVO - Generalizacion problematica")
         
         if stability_focus:
             # Comparación CV vs Hold-out
             cv_val_gap = abs(cv_metrics['mean_accuracy'] - val_metrics['accuracy'])
-            print(f"\n📊 CONSISTENCIA CV vs HOLD-OUT:")
+            print(f"\nCONSISTENCIA CV vs HOLD-OUT:")
             print(f"Gap CV-Holdout (Precisión): {cv_val_gap:.2f}%")
             if cv_val_gap < 3.0:
-                print("✅ EXCELENTE CONSISTENCIA - CV predice bien el rendimiento final")
+                print("EXCELENTE CONSISTENCIA - CV predice bien el rendimiento final")
             elif cv_val_gap < 7.0:
-                print("🟡 BUENA CONSISTENCIA - CV es un buen indicador")
+                print("BUENA CONSISTENCIA - CV es un buen indicador")
             else:
-                print("❌ BAJA CONSISTENCIA - CV no predice bien el rendimiento final")
+                print("BAJA CONSISTENCIA - CV no predice bien el rendimiento final")
         
         # Análisis de precisión por tolerancia
-        print(f"\n🎯 PRECISIÓN POR TOLERANCIA (Validación Final):")
+        print(f"\nPRECISION POR TOLERANCIA (Validacion Final):")
         for tolerance in [1, 2, 3, 5, 7, 10]:
             acc = self._calculate_accuracy(y_val, pred_val, tolerance)
             print(f"±{tolerance} puntos: {acc:.1f}%")
         
-        # Rendimiento de modelos individuales
-        print(f"\n🤖 RENDIMIENTO DE MODELOS INDIVIDUALES (Validación Final):")
+        # Rendimiento de modelos individuales OPTIMIZADOS
+        print(f"\nRENDIMIENTO DE MODELOS INDIVIDUALES (Validacion Final):")
         model_names = list(self.base_models.keys())
         
         for i, name in enumerate(model_names):
@@ -2301,25 +3182,25 @@ class NBATotalPointsPredictor:
         if detailed:
             # Análisis de residuos
             residuals = y_val - pred_val
-            print(f"\n📈 ANÁLISIS DE RESIDUOS:")
+            print(f"\nANALISIS DE RESIDUOS:")
             print(f"Media de residuos: {np.mean(residuals):.3f}")
             print(f"Std de residuos: {np.std(residuals):.3f}")
             print(f"Sesgo (skewness): {self._calculate_skewness(residuals):.3f}")
             print(f"Curtosis: {self._calculate_kurtosis(residuals):.3f}")
-            
+        
             # Percentiles de error
             abs_errors = np.abs(residuals)
-            print(f"\n📊 DISTRIBUCIÓN DE ERRORES ABSOLUTOS:")
+            print(f"\nDISTRIBUCION DE ERRORES ABSOLUTOS:")
             percentiles = [50, 75, 90, 95, 99]
             for p in percentiles:
                 error_p = np.percentile(abs_errors, p)
                 print(f"P{p}: {error_p:.2f} puntos")
-            
+        
             # Importancia de features
             self._display_feature_importance()
         
         # Evaluación del objetivo
-        print(f"\n🎯 EVALUACIÓN DEL OBJETIVO:")
+        print(f"\nEVALUACION DEL OBJETIVO:")
         cv_acc = cv_metrics['mean_accuracy']
         final_acc = val_metrics['accuracy']
         
@@ -2329,28 +3210,28 @@ class NBATotalPointsPredictor:
         if stability_focus:
             print(f"Estabilidad CV (MAE): {mae_cv:.3f}")
             print(f"Gap CV-Final: {cv_val_gap:.2f}%")
-            
+        
             # Criterios de éxito mejorados
             stability_good = mae_cv < 0.15 and acc_cv < 0.15
             consistency_good = cv_val_gap < 5.0
             performance_good = cv_acc >= 85.0 and final_acc >= 85.0
-            
-            print(f"\n📈 CRITERIOS DE ÉXITO:")
-            print(f"✅ Estabilidad CV: {'PASS' if stability_good else 'FAIL'} (CV < 0.15)")
-            print(f"✅ Consistencia CV-Final: {'PASS' if consistency_good else 'FAIL'} (Gap < 5%)")
-            print(f"✅ Rendimiento: {'PASS' if performance_good else 'FAIL'} (Acc >= 85%)")
-            
+        
+            print(f"\nCRITERIOS DE EXITO:")
+            print(f"Estabilidad CV: {'PASS' if stability_good else 'FAIL'} (CV < 0.15)")
+            print(f"Consistencia CV-Final: {'PASS' if consistency_good else 'FAIL'} (Gap < 5%)")
+            print(f"Rendimiento: {'PASS' if performance_good else 'FAIL'} (Acc >= 85%)")
+        
             if stability_good and consistency_good and performance_good:
-                print(f"🏆 MODELO EXITOSO - Cumple todos los criterios de estabilidad")
+                print(f"MODELO EXITOSO - Cumple todos los criterios de estabilidad")
             elif stability_good and consistency_good:
-                print(f"🟡 MODELO PROMETEDOR - Estable pero necesita mejorar rendimiento")
+                print(f"MODELO PROMETEDOR - Estable pero necesita mejorar rendimiento")
             elif performance_good:
-                print(f"🟡 MODELO POTENTE - Buen rendimiento pero inestable")
+                print(f"MODELO POTENTE - Buen rendimiento pero inestable")
             else:
-                print(f"❌ MODELO NECESITA MEJORAS - No cumple criterios críticos")
+                print(f"MODELO NECESITA MEJORAS - No cumple criterios criticos")
         
         # Recomendaciones específicas
-        print(f"\n💡 RECOMENDACIONES ESPECÍFICAS:")
+        print(f"\nRECOMENDACIONES ESPECIFICAS:")
         if stability_focus and not stability_good:
             print("• Aumentar regularización para mejorar estabilidad CV")
             print("• Reducir complejidad del modelo (menos features/parámetros)")
