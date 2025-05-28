@@ -1,0 +1,86 @@
+2025-05-28 14:28:20,899 - __main__ - INFO - Cargando datos...
+2025-05-28 14:28:21,353 - DoubleDouble - INFO - Se identificaron 4766 doble-dobles y 305 triple-dobles
+2025-05-28 14:28:21,355 - DoubleDouble - INFO - VALIDACIÓN: Hay 1 doble-dobles sin puntos (legítimos)
+2025-05-28 14:28:21,385 - src.preprocessing.data_loader - INFO - Integrando datos biométricos con datos de partidos
+2025-05-28 14:28:21,437 - __main__ - INFO - Datos cargados: 5226 registros
+2025-05-28 14:28:21,437 - __main__ - INFO - Creando y entrenando modelo...
+2025-05-28 14:28:21,438 - src.models.teams.total_points.model_total_points - INFO - Usando dispositivo: cpu
+2025-05-28 14:28:21,438 - src.models.teams.total_points.model_total_points - INFO - Iniciando entrenamiento con VALIDACIÓN CRUZADA TEMPORAL MEJORADA...
+2025-05-28 14:28:21,439 - src.models.teams.total_points.model_total_points - INFO - Generando features independientes (sin data leakage)...
+2025-05-28 14:28:22,365 - src.models.teams.total_points.model_total_points - INFO - Aplicando filtro final de correlación >85% para estabilidad...
+2025-05-28 14:28:22,551 - src.models.teams.total_points.model_total_points - INFO - Creando 'total_points' como PTS + PTS_Opp
+2025-05-28 14:28:22,553 - src.models.teams.total_points.model_total_points - INFO - Datos de entrenamiento: 5226 muestras, 30 features
+2025-05-28 14:28:22,553 - src.models.teams.total_points.model_total_points - INFO - Features independientes: pace_efficiency_interaction, direct_scoring_projection, opp_direct_scoring_projection, weighted_shot_volume, FG_Opp, FG, final_projection, total_shot_volume, opp_true_shooting_pct, true_shooting_pct...
+2025-05-28 14:28:22,554 - src.models.teams.total_points.model_total_points - INFO - Rango temporal: 2023-10-24T00:00:00.000000000 a 2025-05-24T00:00:00.000000000
+2025-05-28 14:28:22,554 - src.models.teams.total_points.model_total_points - INFO - Iniciando validación cruzada temporal (7 folds)...
+2025-05-28 14:28:22,554 - src.models.teams.total_points.model_total_points - INFO - 
+--- FOLD 1/7 ---
+2025-05-28 14:28:22,554 - src.models.teams.total_points.model_total_points - INFO - Entrenamiento: 2023-10-24T00:00:00.000000000 a 2023-12-11T00:00:00.000000000
+2025-05-28 14:28:22,560 - src.models.teams.total_points.model_total_points - INFO - Validación: 2023-12-11T00:00:00.000000000 a 2024-01-24T00:00:00.000000000
+2025-05-28 14:28:23,553 - src.models.teams.total_points.model_total_points - INFO - Fold 1 - MAE: 6.913, Acc: 37.2%, R²: 0.691
+2025-05-28 14:28:23,553 - src.models.teams.total_points.model_total_points - INFO - 
+--- FOLD 2/7 ---
+2025-05-28 14:28:23,553 - src.models.teams.total_points.model_total_points - INFO - Entrenamiento: 2023-10-24T00:00:00.000000000 a 2024-01-24T00:00:00.000000000
+2025-05-28 14:28:23,555 - src.models.teams.total_points.model_total_points - INFO - Validación: 2024-01-25T00:00:00.000000000 a 2024-03-13T00:00:00.000000000
+2025-05-28 14:28:24,604 - src.models.teams.total_points.model_total_points - INFO - Fold 2 - MAE: 5.865, Acc: 42.4%, R²: 0.771
+2025-05-28 14:28:24,605 - src.models.teams.total_points.model_total_points - INFO - 
+--- FOLD 3/7 ---
+2025-05-28 14:28:24,606 - src.models.teams.total_points.model_total_points - INFO - Entrenamiento: 2023-10-24T00:00:00.000000000 a 2024-03-13T00:00:00.000000000
+2025-05-28 14:28:24,606 - src.models.teams.total_points.model_total_points - INFO - Validación: 2024-03-13T00:00:00.000000000 a 2024-05-30T00:00:00.000000000
+2025-05-28 14:28:25,747 - src.models.teams.total_points.model_total_points - INFO - Fold 3 - MAE: 4.333, Acc: 47.6%, R²: 0.861
+2025-05-28 14:28:25,747 - src.models.teams.total_points.model_total_points - INFO - 
+--- FOLD 4/7 ---
+2025-05-28 14:28:25,748 - src.models.teams.total_points.model_total_points - INFO - Entrenamiento: 2023-10-24T00:00:00.000000000 a 2024-05-30T00:00:00.000000000
+2025-05-28 14:28:25,749 - src.models.teams.total_points.model_total_points - INFO - Validación: 2024-06-06T00:00:00.000000000 a 2024-12-04T00:00:00.000000000
+2025-05-28 14:28:27,116 - src.models.teams.total_points.model_total_points - INFO - Fold 4 - MAE: 4.754, Acc: 46.1%, R²: 0.847
+2025-05-28 14:28:27,116 - src.models.teams.total_points.model_total_points - INFO - 
+--- FOLD 5/7 ---
+2025-05-28 14:28:27,118 - src.models.teams.total_points.model_total_points - INFO - Entrenamiento: 2023-10-24T00:00:00.000000000 a 2024-12-04T00:00:00.000000000
+2025-05-28 14:28:27,118 - src.models.teams.total_points.model_total_points - INFO - Validación: 2024-12-04T00:00:00.000000000 a 2025-01-23T00:00:00.000000000
+2025-05-28 14:28:28,656 - src.models.teams.total_points.model_total_points - INFO - Fold 5 - MAE: 4.766, Acc: 46.1%, R²: 0.833
+2025-05-28 14:28:28,657 - src.models.teams.total_points.model_total_points - INFO - 
+--- FOLD 6/7 ---
+2025-05-28 14:28:28,658 - src.models.teams.total_points.model_total_points - INFO - Entrenamiento: 2023-10-24T00:00:00.000000000 a 2025-01-23T00:00:00.000000000
+2025-05-28 14:28:28,658 - src.models.teams.total_points.model_total_points - INFO - Validación: 2025-01-23T00:00:00.000000000 a 2025-03-12T00:00:00.000000000
+2025-05-28 14:28:30,291 - src.models.teams.total_points.model_total_points - INFO - Fold 6 - MAE: 5.746, Acc: 48.1%, R²: 0.749
+2025-05-28 14:28:30,292 - src.models.teams.total_points.model_total_points - INFO - 
+--- FOLD 7/7 ---
+2025-05-28 14:28:30,293 - src.models.teams.total_points.model_total_points - INFO - Entrenamiento: 2023-10-24T00:00:00.000000000 a 2025-03-12T00:00:00.000000000
+2025-05-28 14:28:30,293 - src.models.teams.total_points.model_total_points - INFO - Validación: 2025-03-12T00:00:00.000000000 a 2025-05-24T00:00:00.000000000
+2025-05-28 14:28:32,124 - src.models.teams.total_points.model_total_points - INFO - Fold 7 - MAE: 4.844, Acc: 49.6%, R²: 0.817
+2025-05-28 14:28:32,125 - src.models.teams.total_points.model_total_points - INFO - 
+Entrenando modelo final con regularización extrema...
+2025-05-28 14:28:32,133 - src.models.teams.total_points.model_total_points - INFO - Entrenando modelos base con regularización extrema...
+2025-05-28 14:28:32,133 - src.models.teams.total_points.model_total_points - INFO - Entrenando random_forest_primary...
+2025-05-28 14:28:33,082 - src.models.teams.total_points.model_total_points - INFO - random_forest_primary - Train MAE: 2.334, Val MAE: 3.033, Val Acc: 49.4%
+2025-05-28 14:28:33,085 - src.models.teams.total_points.model_total_points - INFO - Entrenando extra_trees_primary...
+2025-05-28 14:28:33,349 - src.models.teams.total_points.model_total_points - INFO - extra_trees_primary - Train MAE: 3.958, Val MAE: 4.207, Val Acc: 37.2%
+2025-05-28 14:28:33,349 - src.models.teams.total_points.model_total_points - INFO - Entrenando gradient_boost_primary...
+2025-05-28 14:28:33,925 - src.models.teams.total_points.model_total_points - INFO - gradient_boost_primary - Train MAE: 7.625, Val MAE: 7.458, Val Acc: 22.8%
+2025-05-28 14:28:33,925 - src.models.teams.total_points.model_total_points - INFO - Entrenando ridge_ultra_conservative...
+2025-05-28 14:28:33,934 - src.models.teams.total_points.model_total_points - INFO - ridge_ultra_conservative - Train MAE: 0.759, Val MAE: 0.767, Val Acc: 95.2%
+2025-05-28 14:28:33,934 - src.models.teams.total_points.model_total_points - INFO - Entrenando elastic_net_ultra_conservative...
+2025-05-28 14:28:33,941 - src.models.teams.total_points.model_total_points - INFO - elastic_net_ultra_conservative - Train MAE: 15.987, Val MAE: 14.939, Val Acc: 12.2%
+2025-05-28 14:28:33,942 - src.models.teams.total_points.model_total_points - INFO - Entrenando xgboost_primary...
+2025-05-28 14:28:34,058 - src.models.teams.total_points.model_total_points - INFO - xgboost_primary - Train MAE: 9.729, Val MAE: 9.396, Val Acc: 18.0%
+2025-05-28 14:28:34,058 - src.models.teams.total_points.model_total_points - INFO - Entrenando lightgbm_primary...
+2025-05-28 14:28:34,098 - src.models.teams.total_points.model_total_points - INFO - lightgbm_primary - Train MAE: 13.182, Val MAE: 12.465, Val Acc: 14.0%
+2025-05-28 14:28:34,098 - src.models.teams.total_points.model_total_points - INFO - Modelo random_forest_primary: peso = 0.350
+2025-05-28 14:28:34,098 - src.models.teams.total_points.model_total_points - INFO - Modelo extra_trees_primary: peso = 0.300
+2025-05-28 14:28:34,098 - src.models.teams.total_points.model_total_points - INFO - Modelo gradient_boost_primary: peso = 0.150
+2025-05-28 14:28:34,098 - src.models.teams.total_points.model_total_points - INFO - Modelo ridge_ultra_conservative: peso = 0.200
+2025-05-28 14:28:34,101 - src.models.teams.total_points.model_total_points - INFO - random_forest_primary - Val MAE: 3.033, Val R²: 0.960, Val Acc: 57.5%
+2025-05-28 14:28:34,103 - src.models.teams.total_points.model_total_points - INFO - extra_trees_primary - Val MAE: 4.207, Val R²: 0.923, Val Acc: 44.2%
+2025-05-28 14:28:34,103 - src.models.teams.total_points.model_total_points - INFO - gradient_boost_primary - Val MAE: 7.458, Val R²: 0.746, Val Acc: 28.2%
+2025-05-28 14:28:34,106 - src.models.teams.total_points.model_total_points - INFO - ridge_ultra_conservative - Val MAE: 0.767, Val R²: 0.995, Val Acc: 94.8%
+2025-05-28 14:28:34,108 - src.models.teams.total_points.model_total_points - INFO - elastic_net_ultra_conservative - Val MAE: 14.939, Val R²: 0.018, Val Acc: 13.5%
+2025-05-28 14:28:34,110 - src.models.teams.total_points.model_total_points - INFO - xgboost_primary - Val MAE: 9.396, Val R²: 0.582, Val Acc: 22.2%
+2025-05-28 14:28:34,110 - src.models.teams.total_points.model_total_points - INFO - lightgbm_primary - Val MAE: 12.465, Val R²: 0.301, Val Acc: 16.8%
+2025-05-28 14:28:34,110 - src.models.teams.total_points.model_total_points - INFO - Modelo ridge_ultra_conservative: peso = 1.000
+2025-05-28 14:28:34,355 - src.models.teams.total_points.model_total_points - INFO - Modelo guardado en: trained_models\total_points_teams.joblib
+2025-05-28 14:28:35,430 - __main__ - INFO - Generando predicciones para análisis...
+2025-05-28 14:28:35,431 - __main__ - INFO - Generando análisis gráfico completo...
+2025-05-28 14:28:35,626 - __main__ - INFO - Generando matriz de correlación...
+2025-05-28 14:28:47,033 - __main__ - INFO - Analizando correlaciones entre features...
+2025-05-28 14:28:54,858 - __main__ - INFO - Realizando prueba de predicción...
+2025-05-28 14:28:56,172 - src.models.teams.total_points.model_total_points - INFO - Predicción optimizada MIN vs OKC: 205.6 puntos (confianza: 70.0%)

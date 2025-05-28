@@ -142,90 +142,125 @@ class NBATotalPointsPredictor:
         # Métricas de rendimiento
         self.performance_metrics = {}
         
-    def _initialize_base_models(self) -> Dict:
+    def _initialize_base_models(self, conservative_level: str = 'moderate') -> Dict:
         """
-        MODELOS BASE ULTRA-OPTIMIZADOS PARA 97% PRECISIÓN
-        Configuración específica para predicción de puntos totales NBA
+        MODELOS BASE UNIFICADOS CON NIVELES DE CONSERVADURISMO CONFIGURABLES
+        
+        Args:
+            conservative_level: 'moderate', 'ultra_conservative', 'aggressive'
         """
+        
+        # Configuraciones por nivel
+        configs = {
+            'moderate': {
+                'rf_n_estimators': 500, 'rf_max_depth': 12, 'rf_min_samples_split': 8,
+                'et_n_estimators': 400, 'et_max_depth': 10, 'et_min_samples_split': 10,
+                'gb_n_estimators': 300, 'gb_learning_rate': 0.05, 'gb_max_depth': 6,
+                'ridge_alpha': 50.0, 'elastic_alpha': 10.0,
+                'xgb_n_estimators': 200, 'xgb_max_depth': 5, 'xgb_learning_rate': 0.03,
+                'lgb_n_estimators': 150, 'lgb_max_depth': 4, 'lgb_learning_rate': 0.02
+            },
+            'ultra_conservative': {
+                'rf_n_estimators': 200, 'rf_max_depth': 8, 'rf_min_samples_split': 20,
+                'et_n_estimators': 150, 'et_max_depth': 6, 'et_min_samples_split': 25,
+                'gb_n_estimators': 100, 'gb_learning_rate': 0.01, 'gb_max_depth': 4,
+                'ridge_alpha': 100.0, 'elastic_alpha': 20.0,
+                'xgb_n_estimators': 80, 'xgb_max_depth': 3, 'xgb_learning_rate': 0.01,
+                'lgb_n_estimators': 60, 'lgb_max_depth': 3, 'lgb_learning_rate': 0.005
+            },
+            'aggressive': {
+                'rf_n_estimators': 800, 'rf_max_depth': 15, 'rf_min_samples_split': 5,
+                'et_n_estimators': 600, 'et_max_depth': 12, 'et_min_samples_split': 5,
+                'gb_n_estimators': 500, 'gb_learning_rate': 0.1, 'gb_max_depth': 8,
+                'ridge_alpha': 10.0, 'elastic_alpha': 5.0,
+                'xgb_n_estimators': 400, 'xgb_max_depth': 8, 'xgb_learning_rate': 0.05,
+                'lgb_n_estimators': 300, 'lgb_max_depth': 6, 'lgb_learning_rate': 0.05
+            }
+        }
+        
+        config = configs.get(conservative_level, configs['moderate'])
+        
         return {
-            # RANDOM FOREST OPTIMIZADO - Estabilidad y robustez
+            # RANDOM FOREST
             'random_forest_primary': RandomForestRegressor(
-                n_estimators=500,           # Más árboles para mayor estabilidad
-                max_depth=12,               # Profundidad optimizada para NBA
-                min_samples_split=8,        # Evitar overfitting
-                min_samples_leaf=4,         # Hojas más robustas
-                max_features=0.7,           # Subset óptimo de features
+                n_estimators=config['rf_n_estimators'],
+                max_depth=config['rf_max_depth'],
+                min_samples_split=config['rf_min_samples_split'],
+                min_samples_leaf=config['rf_min_samples_split'] // 2,
+                max_features=0.7 if conservative_level == 'moderate' else 0.5,
                 bootstrap=True,
-                oob_score=True,             # Out-of-bag validation
+                oob_score=True,
+                min_impurity_decrease=0.01 if conservative_level != 'aggressive' else 0.001,
                 n_jobs=-1,
                 random_state=self.random_state
             ),
             
-            # EXTRA TREES - Diversidad y generalización
+            # EXTRA TREES
             'extra_trees_primary': ExtraTreesRegressor(
-                n_estimators=400,
-                max_depth=10,               # Menos profundidad para generalizar
-                min_samples_split=10,
-                min_samples_leaf=5,
-                max_features=0.8,
-                bootstrap=False,            # Sin bootstrap para mayor diversidad
+                n_estimators=config['et_n_estimators'],
+                max_depth=config['et_max_depth'],
+                min_samples_split=config['et_min_samples_split'],
+                min_samples_leaf=config['et_min_samples_split'] // 2,
+                max_features=0.8 if conservative_level == 'moderate' else 0.4,
+                bootstrap=False,
+                min_impurity_decrease=0.02 if conservative_level == 'ultra_conservative' else 0.01,
                 n_jobs=-1,
                 random_state=self.random_state
             ),
             
-            # GRADIENT BOOSTING ULTRA-CONSERVADOR - Precisión máxima
+            # GRADIENT BOOSTING
             'gradient_boost_primary': GradientBoostingRegressor(
-                n_estimators=300,           # Reducido para evitar overfitting
-                learning_rate=0.05,         # Learning rate muy conservador
-                max_depth=6,                # Profundidad limitada
-                min_samples_split=15,       # Splits muy conservadores
-                min_samples_leaf=8,
-                subsample=0.8,              # Subsampling para robustez
-                max_features=0.6,           # Features limitadas
-                validation_fraction=0.2,    # Validación interna
-                n_iter_no_change=20,        # Early stopping agresivo
-                tol=1e-4,
+                n_estimators=config['gb_n_estimators'],
+                learning_rate=config['gb_learning_rate'],
+                max_depth=config['gb_max_depth'],
+                min_samples_split=config['gb_max_depth'] * 5,
+                min_samples_leaf=config['gb_max_depth'] * 2,
+                subsample=0.8 if conservative_level == 'moderate' else 0.6,
+                max_features=0.6 if conservative_level == 'moderate' else 0.3,
+                validation_fraction=0.2 if conservative_level == 'moderate' else 0.3,
+                n_iter_no_change=20 if conservative_level == 'moderate' else 10,
+                tol=1e-4 if conservative_level == 'moderate' else 1e-3,
                 random_state=self.random_state
             ),
             
-            # RIDGE REGRESSION ULTRA-CONSERVADOR - Baseline estable
+            # RIDGE REGRESSION
             'ridge_ultra_conservative': Ridge(
-                alpha=50.0,                 # Regularización muy fuerte
+                alpha=config['ridge_alpha'],
                 fit_intercept=True,
                 copy_X=True,
-                max_iter=2000,
-                tol=1e-4,
+                max_iter=2000 if conservative_level == 'moderate' else 3000,
+                tol=1e-4 if conservative_level == 'moderate' else 1e-5,
                 solver='auto',
                 random_state=self.random_state
             ),
             
-            # ELASTIC NET - Balance L1/L2
+            # ELASTIC NET
             'elastic_net_ultra_conservative': ElasticNet(
-                alpha=10.0,                 # Regularización fuerte
-                l1_ratio=0.5,               # Balance L1/L2
+                alpha=config['elastic_alpha'],
+                l1_ratio=0.5 if conservative_level == 'moderate' else 0.7,
                 fit_intercept=True,
                 precompute=False,
-                max_iter=2000,
+                max_iter=2000 if conservative_level == 'moderate' else 3000,
                 copy_X=True,
-                tol=1e-4,
+                tol=1e-4 if conservative_level == 'moderate' else 1e-5,
                 warm_start=False,
                 positive=False,
                 random_state=self.random_state,
                 selection='cyclic'
             ),
             
-            # XGBOOST ULTRA-OPTIMIZADO - Potencia controlada
+            # XGBOOST
             'xgboost_primary': XGBRegressor(
-                n_estimators=200,           # Limitado para evitar overfitting
-                max_depth=5,                # Profundidad conservadora
-                learning_rate=0.03,         # Learning rate muy bajo
-                subsample=0.8,
-                colsample_bytree=0.7,
-                colsample_bylevel=0.8,
-                reg_alpha=5.0,              # Regularización L1 fuerte
-                reg_lambda=10.0,            # Regularización L2 fuerte
-                min_child_weight=10,        # Peso mínimo alto
-                gamma=1.0,                  # Complejidad mínima para split
+                n_estimators=config['xgb_n_estimators'],
+                max_depth=config['xgb_max_depth'],
+                learning_rate=config['xgb_learning_rate'],
+                subsample=0.8 if conservative_level == 'moderate' else 0.6,
+                colsample_bytree=0.7 if conservative_level == 'moderate' else 0.5,
+                colsample_bylevel=0.8 if conservative_level == 'moderate' else 0.6,
+                reg_alpha=5.0 if conservative_level == 'moderate' else 20.0,
+                reg_lambda=10.0 if conservative_level == 'moderate' else 30.0,
+                min_child_weight=10 if conservative_level == 'moderate' else 20,
+                gamma=1.0 if conservative_level == 'moderate' else 5.0,
                 objective='reg:squarederror',
                 eval_metric='mae',
                 verbosity=0,
@@ -233,18 +268,19 @@ class NBATotalPointsPredictor:
                 n_jobs=-1
             ),
             
-            # LIGHTGBM ULTRA-CONSERVADOR - Eficiencia y precisión
+            # LIGHTGBM
             'lightgbm_primary': LGBMRegressor(
-                n_estimators=150,
-                max_depth=4,                # Muy limitado
-                learning_rate=0.02,         # Extremadamente conservador
-                num_leaves=15,              # Hojas muy limitadas
-                min_child_samples=25,       # Muestras mínimas altas
+                n_estimators=config['lgb_n_estimators'],
+                max_depth=config['lgb_max_depth'],
+                learning_rate=config['lgb_learning_rate'],
+                num_leaves=15 if conservative_level == 'moderate' else 8,
+                min_child_samples=25 if conservative_level == 'moderate' else 50,
                 min_child_weight=0.01,
-                subsample=0.8,
-                colsample_bytree=0.7,
-                reg_alpha=8.0,              # Regularización L1 muy fuerte
-                reg_lambda=12.0,            # Regularización L2 muy fuerte
+                subsample=0.8 if conservative_level == 'moderate' else 0.6,
+                colsample_bytree=0.7 if conservative_level == 'moderate' else 0.5,
+                reg_alpha=8.0 if conservative_level == 'moderate' else 25.0,
+                reg_lambda=12.0 if conservative_level == 'moderate' else 35.0,
+                min_split_gain=0.5 if conservative_level == 'moderate' else 1.0,
                 objective='regression',
                 metric='mae',
                 boosting_type='gbdt',
@@ -611,7 +647,7 @@ class NBATotalPointsPredictor:
         logger.info(f"Rango temporal: {dates[0]} a {dates[-1]}")
         
         # Inicializar modelos base con REGULARIZACIÓN MÁS AGRESIVA
-        self.base_models = self._initialize_ultra_conservative_models()
+        self.base_models = self._initialize_base_models(conservative_level='ultra_conservative')
         
         # ENTRENAMIENTO CON VALIDACIÓN CRUZADA TEMPORAL MEJORADA
         cv_scores = []
@@ -639,7 +675,7 @@ class NBATotalPointsPredictor:
             X_val_robust = scaler_robust.transform(X_val_fold.values)
             
             # Entrenar modelos base para este fold con REGULARIZACIÓN EXTREMA
-            fold_models = self._initialize_ultra_conservative_models()
+            fold_models = self._initialize_base_models(conservative_level='ultra_conservative')
             base_predictions_val = np.zeros((len(X_val_fold), len(fold_models)))
             
             for i, (name, model) in enumerate(fold_models.items()):
@@ -1004,14 +1040,15 @@ class NBATotalPointsPredictor:
         self.is_trained = True
         
         # Análisis mejorado de resultados
-        self._analyze_model_performance_cv(y_train_final, final_pred_train, y_val_final, ensemble_pred, 
-                                          base_predictions_train_final, base_predictions_val_final, 
-                                           final_pred_train, ensemble_pred, cv_scores)
+        self._analyze_model_performance_unified(y_train_final, final_pred_train, y_val_final, ensemble_pred, 
+                                              base_predictions_train_final, base_predictions_val_final, 
+                                              final_pred_train, ensemble_pred, cv_scores,
+                                              detailed=True, stability_focus=True)
         
         # GUARDADO ÚNICO DEL MODELO
         try:
-            # Crear carpeta models si no existe
-            models_dir = "models"
+            # Crear carpeta trained_models si no existe
+            models_dir = "trained_models"
             if not os.path.exists(models_dir):
                 os.makedirs(models_dir)
             
@@ -2103,12 +2140,22 @@ class NBATotalPointsPredictor:
             )
         }
 
-    def _analyze_model_performance_cv_improved(self, y_train, pred_train, y_val, pred_val, 
-                                              base_pred_train, base_pred_val, ensemble_train, ensemble_val, cv_scores):
-        """Análisis mejorado del rendimiento del modelo con enfoque en estabilidad CV"""
+    def _analyze_model_performance_unified(self, y_train, pred_train, y_val, pred_val, 
+                                          base_pred_train, base_pred_val, ensemble_train, ensemble_val, cv_scores,
+                                          detailed: bool = True, stability_focus: bool = True):
+        """
+        ANÁLISIS UNIFICADO DEL RENDIMIENTO DEL MODELO
+        
+        Args:
+            detailed: Si incluir análisis detallado de features y residuos
+            stability_focus: Si enfocarse en estabilidad CV y consistencia
+        """
         
         print("\n" + "="*80)
-        print("ANÁLISIS MEJORADO DEL MODELO - ENFOQUE EN ESTABILIDAD CV")
+        title = "ANÁLISIS COMPLETO DEL MODELO" if detailed else "ANÁLISIS BÁSICO DEL MODELO"
+        if stability_focus:
+            title += " - ENFOQUE EN ESTABILIDAD CV"
+        print(title)
         print("="*80)
         
         # Métricas de validación cruzada
@@ -2117,39 +2164,40 @@ class NBATotalPointsPredictor:
         val_metrics = self.performance_metrics['validation']
         
         print(f"\n📊 VALIDACIÓN CRUZADA TEMPORAL (7 FOLDS):")
-        print(f"{'Métrica':<15} {'Media':<15} {'Std':<15} {'Min':<15} {'Max':<15}")
-        print("-" * 75)
+        print(f"{'Métrica':<15} {'Media':<15} {'Std':<15} {'CV':<15} {'Min':<15} {'Max':<15}")
+        print("-" * 90)
         
         fold_maes = [score['mae'] for score in cv_scores]
         fold_accs = [score['accuracy'] for score in cv_scores]
         fold_r2s = [score['r2'] for score in cv_scores]
         
         # Coeficiente de variación para medir estabilidad
-        mae_cv = cv_metrics['std_mae'] / cv_metrics['mean_mae']
-        acc_cv = cv_metrics['std_accuracy'] / cv_metrics['mean_accuracy']
-        r2_cv = cv_metrics['std_r2'] / cv_metrics['mean_r2']
+        mae_cv = cv_metrics['std_mae'] / cv_metrics['mean_mae'] if cv_metrics['mean_mae'] > 0 else 0
+        acc_cv = cv_metrics['std_accuracy'] / cv_metrics['mean_accuracy'] if cv_metrics['mean_accuracy'] > 0 else 0
+        r2_cv = cv_metrics['std_r2'] / cv_metrics['mean_r2'] if cv_metrics['mean_r2'] > 0 else 0
         
         print(f"{'MAE':<15} {cv_metrics['mean_mae']:<15.3f} {cv_metrics['std_mae']:<15.3f} {mae_cv:<15.3f} {min(fold_maes):<15.3f} {max(fold_maes):<15.3f}")
         print(f"{'Precisión (%)':<15} {cv_metrics['mean_accuracy']:<15.2f} {cv_metrics['std_accuracy']:<15.2f} {acc_cv:<15.3f} {min(fold_accs):<15.2f} {max(fold_accs):<15.2f}")
         print(f"{'R²':<15} {cv_metrics['mean_r2']:<15.3f} {cv_metrics['std_r2']:<15.3f} {r2_cv:<15.3f} {min(fold_r2s):<15.3f} {max(fold_r2s):<15.3f}")
         
-        # Análisis de estabilidad CV
-        print(f"\n🔍 ANÁLISIS DE ESTABILIDAD CV:")
-        if mae_cv < 0.1 and acc_cv < 0.1:
-            print("✅ EXCELENTE ESTABILIDAD - Modelo muy consistente entre folds")
-        elif mae_cv < 0.2 and acc_cv < 0.2:
-            print("🟡 BUENA ESTABILIDAD - Modelo moderadamente consistente")
-        else:
-            print("❌ BAJA ESTABILIDAD - Modelo inconsistente entre folds")
-        
-        print(f"Coeficiente de variación MAE: {mae_cv:.3f} ({'Excelente' if mae_cv < 0.1 else 'Bueno' if mae_cv < 0.2 else 'Problemático'})")
-        print(f"Coeficiente de variación Precisión: {acc_cv:.3f} ({'Excelente' if acc_cv < 0.1 else 'Bueno' if acc_cv < 0.2 else 'Problemático'})")
+        if stability_focus:
+            # Análisis de estabilidad CV
+            print(f"\n🔍 ANÁLISIS DE ESTABILIDAD CV:")
+            if mae_cv < 0.1 and acc_cv < 0.1:
+                print("✅ EXCELENTE ESTABILIDAD - Modelo muy consistente entre folds")
+            elif mae_cv < 0.2 and acc_cv < 0.2:
+                print("🟡 BUENA ESTABILIDAD - Modelo moderadamente consistente")
+            else:
+                print("❌ BAJA ESTABILIDAD - Modelo inconsistente entre folds")
+            
+            print(f"Coeficiente de variación MAE: {mae_cv:.3f} ({'Excelente' if mae_cv < 0.1 else 'Bueno' if mae_cv < 0.2 else 'Problemático'})")
+            print(f"Coeficiente de variación Precisión: {acc_cv:.3f} ({'Excelente' if acc_cv < 0.1 else 'Bueno' if acc_cv < 0.2 else 'Problemático'})")
         
         print(f"\n📈 DETALLES POR FOLD:")
         for i, score in enumerate(cv_scores):
             print(f"Fold {score['fold']}: MAE={score['mae']:.3f}, Acc={score['accuracy']:.1f}%, R²={score['r2']:.3f}, Train={score['n_train']}, Val={score['n_val']}")
         
-        print(f"\n📊 MÉTRICAS FINALES (Hold-out 85-15):")
+        print(f"\n📊 MÉTRICAS FINALES (Hold-out):")
         print(f"{'Métrica':<15} {'Entrenamiento':<15} {'Validación':<15} {'Gap':<15} {'Gap %':<15}")
         print("-" * 75)
         
@@ -2158,16 +2206,16 @@ class NBATotalPointsPredictor:
         mae_gap = abs(train_metrics['mae'] - val_metrics['mae'])
         r2_gap = abs(train_metrics['r2'] - val_metrics['r2'])
         
-        acc_gap_pct = (acc_gap / val_metrics['accuracy']) * 100
-        mae_gap_pct = (mae_gap / val_metrics['mae']) * 100
+        acc_gap_pct = (acc_gap / val_metrics['accuracy']) * 100 if val_metrics['accuracy'] > 0 else 0
+        mae_gap_pct = (mae_gap / val_metrics['mae']) * 100 if val_metrics['mae'] > 0 else 0
         r2_gap_pct = (r2_gap / val_metrics['r2']) * 100 if val_metrics['r2'] > 0 else 0
         
         print(f"{'Precisión (%)':<15} {train_metrics['accuracy']:<15.2f} {val_metrics['accuracy']:<15.2f} {acc_gap:<15.2f} {acc_gap_pct:<15.1f}")
         print(f"{'MAE':<15} {train_metrics['mae']:<15.3f} {val_metrics['mae']:<15.3f} {mae_gap:<15.3f} {mae_gap_pct:<15.1f}")
         print(f"{'R²':<15} {train_metrics['r2']:<15.4f} {val_metrics['r2']:<15.4f} {r2_gap:<15.4f} {r2_gap_pct:<15.1f}")
         
-        # Análisis de overfitting mejorado
-        print(f"\n🔍 ANÁLISIS DE OVERFITTING MEJORADO:")
+        # Análisis de overfitting
+        print(f"\n🔍 ANÁLISIS DE OVERFITTING:")
         if acc_gap < 2.0 and mae_gap < 0.5 and r2_gap < 0.05:
             print("✅ SIN OVERFITTING - Excelente generalización")
         elif acc_gap < 5.0 and mae_gap < 1.0 and r2_gap < 0.1:
@@ -2175,16 +2223,17 @@ class NBATotalPointsPredictor:
         else:
             print("❌ OVERFITTING SIGNIFICATIVO - Generalización problemática")
         
-        # Comparación CV vs Hold-out
-        cv_val_gap = abs(cv_metrics['mean_accuracy'] - val_metrics['accuracy'])
-        print(f"\n📊 CONSISTENCIA CV vs HOLD-OUT:")
-        print(f"Gap CV-Holdout (Precisión): {cv_val_gap:.2f}%")
-        if cv_val_gap < 3.0:
-            print("✅ EXCELENTE CONSISTENCIA - CV predice bien el rendimiento final")
-        elif cv_val_gap < 7.0:
-            print("🟡 BUENA CONSISTENCIA - CV es un buen indicador")
-        else:
-            print("❌ BAJA CONSISTENCIA - CV no predice bien el rendimiento final")
+        if stability_focus:
+            # Comparación CV vs Hold-out
+            cv_val_gap = abs(cv_metrics['mean_accuracy'] - val_metrics['accuracy'])
+            print(f"\n📊 CONSISTENCIA CV vs HOLD-OUT:")
+            print(f"Gap CV-Holdout (Precisión): {cv_val_gap:.2f}%")
+            if cv_val_gap < 3.0:
+                print("✅ EXCELENTE CONSISTENCIA - CV predice bien el rendimiento final")
+            elif cv_val_gap < 7.0:
+                print("🟡 BUENA CONSISTENCIA - CV es un buen indicador")
+            else:
+                print("❌ BAJA CONSISTENCIA - CV no predice bien el rendimiento final")
         
         # Análisis de precisión por tolerancia
         print(f"\n🎯 PRECISIÓN POR TOLERANCIA (Validación Final):")
@@ -2207,59 +2256,66 @@ class NBATotalPointsPredictor:
         ensemble_mae = mean_absolute_error(y_val, pred_val)
         ensemble_r2 = r2_score(y_val, pred_val)
         ensemble_acc = self._calculate_accuracy(y_val, pred_val, tolerance=2.5)
-        print(f"{'ENSEMBLE_ULTRA_CONSERVADOR':<30}: MAE={ensemble_mae:.3f}, R²={ensemble_r2:.4f}, Acc={ensemble_acc:.1f}%")
+        ensemble_name = "ENSEMBLE_ULTRA_CONSERVADOR" if stability_focus else "ENSEMBLE_OPTIMIZADO"
+        print(f"{ensemble_name:<30}: MAE={ensemble_mae:.3f}, R²={ensemble_r2:.4f}, Acc={ensemble_acc:.1f}%")
         
-        # Análisis de residuos
-        residuals = y_val - pred_val
-        print(f"\n📈 ANÁLISIS DE RESIDUOS:")
-        print(f"Media de residuos: {np.mean(residuals):.3f}")
-        print(f"Std de residuos: {np.std(residuals):.3f}")
-        print(f"Sesgo (skewness): {self._calculate_skewness(residuals):.3f}")
-        print(f"Curtosis: {self._calculate_kurtosis(residuals):.3f}")
+        if detailed:
+            # Análisis de residuos
+            residuals = y_val - pred_val
+            print(f"\n📈 ANÁLISIS DE RESIDUOS:")
+            print(f"Media de residuos: {np.mean(residuals):.3f}")
+            print(f"Std de residuos: {np.std(residuals):.3f}")
+            print(f"Sesgo (skewness): {self._calculate_skewness(residuals):.3f}")
+            print(f"Curtosis: {self._calculate_kurtosis(residuals):.3f}")
+            
+            # Percentiles de error
+            abs_errors = np.abs(residuals)
+            print(f"\n📊 DISTRIBUCIÓN DE ERRORES ABSOLUTOS:")
+            percentiles = [50, 75, 90, 95, 99]
+            for p in percentiles:
+                error_p = np.percentile(abs_errors, p)
+                print(f"P{p}: {error_p:.2f} puntos")
+            
+            # Importancia de features
+            self._display_feature_importance()
         
-        # Percentiles de error
-        abs_errors = np.abs(residuals)
-        print(f"\n📊 DISTRIBUCIÓN DE ERRORES ABSOLUTOS:")
-        percentiles = [50, 75, 90, 95, 99]
-        for p in percentiles:
-            error_p = np.percentile(abs_errors, p)
-            print(f"P{p}: {error_p:.2f} puntos")
-        
-        # Evaluación del objetivo con enfoque en estabilidad
-        print(f"\n🎯 EVALUACIÓN DEL OBJETIVO (ESTABILIDAD CV):")
+        # Evaluación del objetivo
+        print(f"\n🎯 EVALUACIÓN DEL OBJETIVO:")
         cv_acc = cv_metrics['mean_accuracy']
         final_acc = val_metrics['accuracy']
         
         print(f"Precisión CV: {cv_acc:.2f}% ± {cv_metrics['std_accuracy']:.2f}%")
         print(f"Precisión Final: {final_acc:.2f}%")
-        print(f"Estabilidad CV (MAE): {mae_cv:.3f}")
-        print(f"Gap CV-Final: {cv_val_gap:.2f}%")
         
-        # Criterios de éxito mejorados
-        stability_good = mae_cv < 0.15 and acc_cv < 0.15
-        consistency_good = cv_val_gap < 5.0
-        performance_good = cv_acc >= 85.0 and final_acc >= 85.0
-        
-        print(f"\n📈 CRITERIOS DE ÉXITO:")
-        print(f"✅ Estabilidad CV: {'PASS' if stability_good else 'FAIL'} (CV < 0.15)")
-        print(f"✅ Consistencia CV-Final: {'PASS' if consistency_good else 'FAIL'} (Gap < 5%)")
-        print(f"✅ Rendimiento: {'PASS' if performance_good else 'FAIL'} (Acc >= 85%)")
-        
-        if stability_good and consistency_good and performance_good:
-            print(f"🏆 MODELO EXITOSO - Cumple todos los criterios de estabilidad")
-        elif stability_good and consistency_good:
-            print(f"🟡 MODELO PROMETEDOR - Estable pero necesita mejorar rendimiento")
-        elif performance_good:
-            print(f"🟡 MODELO POTENTE - Buen rendimiento pero inestable")
-        else:
-            print(f"❌ MODELO NECESITA MEJORAS - No cumple criterios críticos")
+        if stability_focus:
+            print(f"Estabilidad CV (MAE): {mae_cv:.3f}")
+            print(f"Gap CV-Final: {cv_val_gap:.2f}%")
+            
+            # Criterios de éxito mejorados
+            stability_good = mae_cv < 0.15 and acc_cv < 0.15
+            consistency_good = cv_val_gap < 5.0
+            performance_good = cv_acc >= 85.0 and final_acc >= 85.0
+            
+            print(f"\n📈 CRITERIOS DE ÉXITO:")
+            print(f"✅ Estabilidad CV: {'PASS' if stability_good else 'FAIL'} (CV < 0.15)")
+            print(f"✅ Consistencia CV-Final: {'PASS' if consistency_good else 'FAIL'} (Gap < 5%)")
+            print(f"✅ Rendimiento: {'PASS' if performance_good else 'FAIL'} (Acc >= 85%)")
+            
+            if stability_good and consistency_good and performance_good:
+                print(f"🏆 MODELO EXITOSO - Cumple todos los criterios de estabilidad")
+            elif stability_good and consistency_good:
+                print(f"🟡 MODELO PROMETEDOR - Estable pero necesita mejorar rendimiento")
+            elif performance_good:
+                print(f"🟡 MODELO POTENTE - Buen rendimiento pero inestable")
+            else:
+                print(f"❌ MODELO NECESITA MEJORAS - No cumple criterios críticos")
         
         # Recomendaciones específicas
         print(f"\n💡 RECOMENDACIONES ESPECÍFICAS:")
-        if not stability_good:
+        if stability_focus and not stability_good:
             print("• Aumentar regularización para mejorar estabilidad CV")
             print("• Reducir complejidad del modelo (menos features/parámetros)")
-        if not consistency_good:
+        if stability_focus and not consistency_good:
             print("• Revisar estrategia de validación cruzada")
             print("• Verificar data leakage temporal")
         if not performance_good:
@@ -2267,7 +2323,7 @@ class NBATotalPointsPredictor:
             print("• Considerar modelos más sofisticados")
         if mae_cv > 0.2:
             print("• Modelo muy inestable - Revisar features problemáticas")
-        if cv_val_gap > 10.0:
+        if stability_focus and cv_val_gap > 10.0:
             print("• Gran inconsistencia CV-Final - Revisar división temporal")
         
         print("="*80)
