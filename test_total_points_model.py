@@ -8,6 +8,7 @@ import warnings
 import logging
 from src.preprocessing.data_loader import NBADataLoader
 from src.models.teams.total_points.model_total_points import NBATotalPointsPredictor
+import os
 
 # Configuración de visualización
 plt.style.use('seaborn-v0_8')
@@ -329,7 +330,7 @@ def main():
     logger.info("Creando y entrenando modelo...")
     model = NBATotalPointsPredictor(random_state=42)
         
-        # Entrenar modelo
+    # Entrenar modelo
     performance_metrics = model.train(teams_data)
     
     # Obtener datos para análisis
@@ -399,12 +400,6 @@ def main():
     val_acc = performance_metrics['validation']['accuracy']
     cv_acc = performance_metrics['cross_validation']['mean_accuracy']
     
-    if val_acc < 90:
-        print("🔧 MEJORAS PRIORITARIAS:")
-        print("   • Agregar más features de matchup específico")
-        print("   • Optimizar hiperparámetros con más iteraciones")
-        print("   • Considerar features de momentum y streaks")
-        print("   • Analizar outliers y casos extremos")
     
     if cv_acc - val_acc > 5:
         print("⚠️  POSIBLE OVERFITTING:")
