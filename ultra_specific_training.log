@@ -1,0 +1,8 @@
+2025-05-27 19:43:13,905 - INFO - ================================================================================
+2025-05-27 19:43:13,905 - ERROR - Error cargando datos: NBADataLoader.__init__() missing 3 required positional arguments: 'game_data_path', 'biometrics_path', and 'teams_path'
+2025-05-27 19:44:15,540 - INFO - ================================================================================
+2025-05-27 19:44:15,546 - ERROR - Error cargando datos: NBADataLoader.__init__() missing 3 required positional arguments: 'game_data_path', 'biometrics_path', and 'teams_path'
+2025-05-27 19:46:38,686 - INFO - ================================================================================
+2025-05-27 19:46:38,689 - ERROR - Error cargando datos: NBADataLoader.__init__() missing 3 required positional arguments: 'game_data_path', 'biometrics_path', and 'teams_path'
+2025-05-27 19:46:55,037 - INFO - ================================================================================
+2025-05-27 19:46:55,040 - ERROR - Error cargando datos: NBADataLoader.__init__() missing 3 required positional arguments: 'game_data_path', 'biometrics_path', and 'teams_path'

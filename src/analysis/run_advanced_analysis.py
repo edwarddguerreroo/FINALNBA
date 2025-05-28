@@ -168,7 +168,7 @@ def main():
         # Cargar datos
         logger.info("Cargando datos...")
         data_paths = {
-            'game_data': os.path.join(args.data_dir, 'processed_data.csv'),
+            'game_data': os.path.join(args.data_dir, 'processed\players_features.csv'),
             'biometrics': os.path.join(args.data_dir, 'height.csv'),
             'teams': os.path.join(args.data_dir, 'teams.csv')
         }
@@ -189,8 +189,17 @@ def main():
         for model_name, model in trainer.get_trained_models().items():
             logger.info(f"Analizando modelo: {model_name}")
             
-            # Obtener datos de entrenamiento y prueba
-            X_train, X_test, y_train, y_test = model.get_train_test_data()
+            try:
+                # Verificar si el modelo tiene datos preparados
+                X_train, X_test, y_train, y_test = model.get_train_test_data()
+            except ValueError as e:
+                # Si no tiene datos, prepararlos nuevamente
+                logger.warning(f"Datos no preparados para {model_name}, preparando nuevamente...")
+                X_train, X_test, y_train, y_test = model.prepare_data(
+                    trainer.get_processed_data(), 
+                    test_size=0.2, 
+                    time_split=True
+                )
             
             # Obtener el mejor modelo
             best_model_name, best_model, _ = model.get_best_model()
@@ -459,9 +468,12 @@ def main():
                 logger.info(f"   * Recall: {metrics['recall']:.4f}")
                 logger.info(f"   * F1-Score: {metrics['f1_score']:.4f}")
                 logger.info(f"   * Matthews Corr Coef: {metrics['matthews_corr_coef']:.4f}")
-                logger.info(f"   * AUC-ROC: {metrics['auc_roc']:.4f}")
-                logger.info(f"   * AUC-PR: {metrics['auc_pr']:.4f}")
-                logger.info(f"   * Brier Score: {metrics['brier_score']:.4f}")
+                if 'auc_roc' in metrics:
+                    logger.info(f"   * AUC-ROC: {metrics['auc_roc']:.4f}")
+                if 'auc_pr' in metrics:
+                    logger.info(f"   * AUC-PR: {metrics['auc_pr']:.4f}")
+                if 'brier_score' in metrics:
+                    logger.info(f"   * Brier Score: {metrics['brier_score']:.4f}")
                 if metrics.get('log_loss'):
                     logger.info(f"   * Log Loss: {metrics['log_loss']:.4f}")
             else:  # Modelo de regresión

@@ -1,0 +1,6 @@
+---
+description: 
+globs: 
+alwaysApply: true
+---
+no quiero que cres mas archivos si no son necesarios (estas creando archivos cada vez que vas a hacer un cambio)

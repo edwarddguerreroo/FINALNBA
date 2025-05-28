@@ -1,3 +1,3 @@
 """
-Módulo principal para el sistema de predicción NBA.
+Módulo principal para la carga de datos.
 """

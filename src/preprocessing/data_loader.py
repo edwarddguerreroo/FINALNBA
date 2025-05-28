@@ -83,7 +83,7 @@ class NBADataLoader:
         df = df.copy()
         
         # Convertir fechas
-        df['Date'] = pd.to_datetime(df['Date'])
+        df['Date'] = pd.to_datetime(df['Date'], format='mixed')
         
         # Parsear resultados usando TeamsParser
         df = self.teams_parser.parse_dataframe(df)
@@ -139,7 +139,7 @@ class NBADataLoader:
         df = df.copy()
         
         # Convertir fechas
-        df['Date'] = pd.to_datetime(df['Date'])
+        df['Date'] = pd.to_datetime(df['Date'], format='mixed')
         
         # Parsear resultados
         df = self.result_parser.parse_dataframe(df)
