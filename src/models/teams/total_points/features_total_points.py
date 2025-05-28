@@ -30,6 +30,13 @@ class TotalPointsFeatureEngine:
         # Crear copia para evitar modificar datos originales
         df = teams_data.copy()
         
+        # Asegurar orden cronológico para evitar data leakage
+        if 'Date' in df.columns:
+            df['Date'] = pd.to_datetime(df['Date'])
+            df = df.sort_values(by='Date').reset_index(drop=True)
+        else:
+            print("⚠️ Columna 'Date' no encontrada - usando orden original")
+        
         # PASO 1: Cálculos base (una sola vez)
         df = self._create_base_calculations(df)
         
@@ -231,11 +238,15 @@ class TotalPointsFeatureEngine:
         )
         
         # ==================== FEATURES DE OPONENTE OPTIMIZADAS ====================
-        # Calidad del oponente (una sola vez)
-        opp_def_ranking = df.groupby('Opp')['PTS_Opp'].rolling(10, min_periods=3).mean().reset_index(0, drop=True)
+        # Calidad del oponente (una sola vez) - CORREGIDO: Sin data leakage
+        opp_def_ranking = df.groupby('Opp')['PTS_Opp'].transform(
+            lambda x: x.shift(1).rolling(10, min_periods=3).mean()
+        )
         df['opp_defensive_ranking'] = opp_def_ranking.rank(pct=True).fillna(0.5)
         
-        opp_off_ranking = df.groupby('Opp')['PTS'].rolling(10, min_periods=3).mean().reset_index(0, drop=True)
+        opp_off_ranking = df.groupby('Opp')['PTS'].transform(
+            lambda x: x.shift(1).rolling(10, min_periods=3).mean()
+        )
         df['opp_offensive_ranking'] = opp_off_ranking.rank(pct=True).fillna(0.5)
         
         df['opponent_quality_factor'] = (

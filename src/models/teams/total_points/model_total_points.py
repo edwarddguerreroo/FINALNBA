@@ -507,12 +507,61 @@ class NBATotalPointsPredictor:
         logger.info(f"Mejor configuración de red neuronal: {config}")
         return config
     
-    def _train_neural_network(self, X_train: np.ndarray, y_train: np.ndarray, 
-                            X_val: np.ndarray, y_val: np.ndarray,
-                            hidden_sizes: List[int] = None, dropout_rate: float = 0.5,
-                            learning_rate: float = 0.001, batch_size: int = 32,
-                            weight_decay: float = 1e-3) -> AdvancedNeuralNetwork:
-        """Entrena la red neuronal con early stopping y regularización agresiva"""
+    def _train_neural_network_unified(self, X_train: np.ndarray, y_train: np.ndarray, 
+                                     X_val: np.ndarray, y_val: np.ndarray,
+                                     model: AdvancedNeuralNetwork = None,
+                                     regularization_level: str = 'moderate',
+                                     hidden_sizes: List[int] = None, 
+                                     dropout_rate: float = None,
+                                     learning_rate: float = None, 
+                                     batch_size: int = None,
+                                     weight_decay: float = None) -> AdvancedNeuralNetwork:
+        """
+        ENTRENAMIENTO UNIFICADO DE REDES NEURONALES
+        
+        Args:
+            regularization_level: 'light', 'moderate', 'aggressive', 'ultra_aggressive'
+            model: Modelo preexistente o None para crear uno nuevo
+            Otros parámetros: Si son None, se usan valores por defecto según regularization_level
+        """
+        
+        # Configuraciones por nivel de regularización
+        configs = {
+            'light': {
+                'dropout_rate': 0.3, 'learning_rate': 0.001, 'batch_size': 64,
+                'weight_decay': 1e-4, 'patience': 20, 'max_epochs': 500,
+                'grad_clip': 1.0, 'l1_reg': 0.0, 'l2_reg': 0.0
+            },
+            'moderate': {
+                'dropout_rate': 0.5, 'learning_rate': 0.001, 'batch_size': 32,
+                'weight_decay': 1e-3, 'patience': 15, 'max_epochs': 300,
+                'grad_clip': 1.0, 'l1_reg': 0.001, 'l2_reg': 0.001
+            },
+            'aggressive': {
+                'dropout_rate': 0.7, 'learning_rate': 0.0005, 'batch_size': 16,
+                'weight_decay': 1e-2, 'patience': 10, 'max_epochs': 200,
+                'grad_clip': 0.5, 'l1_reg': 0.01, 'l2_reg': 0.01
+            },
+            'ultra_aggressive': {
+                'dropout_rate': 0.8, 'learning_rate': 0.00005, 'batch_size': 8,
+                'weight_decay': 0.3, 'patience': 5, 'max_epochs': 50,
+                'grad_clip': 0.1, 'l1_reg': 0.001, 'l2_reg': 0.001
+            }
+        }
+        
+        config = configs.get(regularization_level, configs['moderate'])
+        
+        # Usar parámetros proporcionados o valores por defecto
+        dropout_rate = dropout_rate if dropout_rate is not None else config['dropout_rate']
+        learning_rate = learning_rate if learning_rate is not None else config['learning_rate']
+        batch_size = batch_size if batch_size is not None else config['batch_size']
+        weight_decay = weight_decay if weight_decay is not None else config['weight_decay']
+        
+        # Crear modelo si no se proporciona
+        if model is None:
+            if hidden_sizes is None:
+                hidden_sizes = [32, 16] if regularization_level in ['aggressive', 'ultra_aggressive'] else [64, 32]
+            model = self._create_neural_network(X_train.shape[1], hidden_sizes, dropout_rate)
         
         # Convertir a tensores
         X_train_tensor = torch.FloatTensor(X_train).to(self.device)
@@ -520,39 +569,65 @@ class NBATotalPointsPredictor:
         X_val_tensor = torch.FloatTensor(X_val).to(self.device)
         y_val_tensor = torch.FloatTensor(y_val.reshape(-1, 1)).to(self.device)
         
-        # Crear datasets con batch_size optimizado
+        # Crear datasets
         train_dataset = TensorDataset(X_train_tensor, y_train_tensor)
         train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
         
-        # Inicializar modelo con arquitectura optimizada
-        model = self._create_neural_network(X_train.shape[1], hidden_sizes, dropout_rate)
-        
-        # Optimizador y función de pérdida con parámetros optimizados
+        # Optimizador y scheduler
         optimizer = optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
-        scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, patience=15, factor=0.3)  # Más agresivo
+        
+        # Scheduler más o menos agresivo según el nivel
+        patience_scheduler = config['patience'] // 2 if regularization_level == 'ultra_aggressive' else config['patience']
+        factor = 0.3 if regularization_level in ['aggressive', 'ultra_aggressive'] else 0.5
+        scheduler = optim.lr_scheduler.ReduceLROnPlateau(
+            optimizer, patience=patience_scheduler, factor=factor, min_lr=1e-7
+        )
+        
+        # Función de pérdida
         criterion = nn.MSELoss()
         
-        # Early stopping más agresivo
+        # Early stopping
         best_val_loss = float('inf')
         patience_counter = 0
-        patience = 15  # Reducido de 20
+        patience = config['patience']
+        max_epochs = config['max_epochs']
         
         model.train()
-        max_epochs = 300  # Reducido de 500
         
-        # Barra de progreso para entrenamiento de red neuronal
-        with tqdm(total=max_epochs, desc="Entrenando red neuronal", 
+        # Barra de progreso
+        desc = f"Entrenando NN ({regularization_level})"
+        with tqdm(total=max_epochs, desc=desc, 
                  bar_format='{desc}: {percentage:3.0f}%|{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}] Val Loss: {postfix}') as pbar:
             
             for epoch in range(max_epochs):
+                epoch_loss = 0
+                batch_count = 0
+                
                 for batch_X, batch_y in train_loader:
                     optimizer.zero_grad()
                     outputs = model(batch_X)
+                    
+                    # Pérdida principal
                     loss = criterion(outputs, batch_y)
+                    
+                    # Regularización adicional según el nivel
+                    if config['l1_reg'] > 0 or config['l2_reg'] > 0:
+                        l1_reg = torch.tensor(0., device=self.device)
+                        l2_reg = torch.tensor(0., device=self.device)
+                        for param in model.parameters():
+                            l1_reg += torch.norm(param, 1)
+                            l2_reg += torch.norm(param, 2)
+                        
+                        loss += config['l1_reg'] * l1_reg + config['l2_reg'] * l2_reg
+                    
                     loss.backward()
-                    # Gradient clipping para estabilidad
-                    torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+                    
+                    # Gradient clipping
+                    torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=config['grad_clip'])
                     optimizer.step()
+                    
+                    epoch_loss += loss.item()
+                    batch_count += 1
                 
                 # Validación
                 model.eval()
@@ -573,15 +648,26 @@ class NBATotalPointsPredictor:
                     best_model_state = model.state_dict().copy()
                 else:
                     patience_counter += 1
-                    
-                if patience_counter >= patience:
-                    pbar.set_description(f"Entrenando red neuronal (Early stop)")
-                    break
+                
+                # Condiciones de parada
+                avg_train_loss = epoch_loss / batch_count
+                
+                # Para ultra_aggressive, parar muy temprano si hay overfitting
+                if regularization_level == 'ultra_aggressive':
+                    if patience_counter >= patience or (avg_train_loss < val_loss * 0.7 and epoch > 5):
+                        pbar.set_description(f"Entrenando NN ({regularization_level}) - Early stop")
+                        break
+                else:
+                    if patience_counter >= patience:
+                        pbar.set_description(f"Entrenando NN ({regularization_level}) - Early stop")
+                        break
                 
                 model.train()
         
         # Cargar mejor modelo
-        model.load_state_dict(best_model_state)
+        if 'best_model_state' in locals():
+            model.load_state_dict(best_model_state)
+        
         return model
     
     def train(self, teams_data: pd.DataFrame, target_col: str = 'total_points') -> Dict:
@@ -1064,97 +1150,6 @@ class NBATotalPointsPredictor:
         
         return self.performance_metrics
     
-    def _train_neural_network_simple(self, X_train: np.ndarray, y_train: np.ndarray, 
-                                   X_val: np.ndarray, y_val: np.ndarray,
-                                   model: AdvancedNeuralNetwork) -> AdvancedNeuralNetwork:
-        """Entrena red neuronal con regularización ULTRA-AGRESIVA anti-overfitting"""
-        
-        # Convertir a tensores
-        X_train_tensor = torch.FloatTensor(X_train).to(self.device)
-        y_train_tensor = torch.FloatTensor(y_train.reshape(-1, 1)).to(self.device)
-        
-        X_val_tensor = torch.FloatTensor(X_val).to(self.device)
-        y_val_tensor = torch.FloatTensor(y_val.reshape(-1, 1)).to(self.device)
-        
-        # Crear datasets con batch_size muy pequeño
-        train_dataset = TensorDataset(X_train_tensor, y_train_tensor)
-        train_loader = DataLoader(train_dataset, batch_size=8, shuffle=True)  # Batch muy pequeño
-        
-        # Optimizador con regularización EXTREMA
-        optimizer = optim.AdamW(model.parameters(), lr=0.00005, weight_decay=0.3)  # LR muy bajo, weight decay extremo
-        
-        # Scheduler muy agresivo
-        scheduler = optim.lr_scheduler.ReduceLROnPlateau(
-            optimizer, patience=3, factor=0.3, min_lr=1e-7
-        )
-        
-        # Función de pérdida con regularización adicional
-        criterion = nn.MSELoss()
-        
-        # Early stopping ULTRA agresivo
-        best_val_loss = float('inf')
-        patience_counter = 0
-        patience = 5  # Muy poca paciencia
-        
-        model.train()
-        for epoch in range(50):  # Muy pocas épocas máximas
-            epoch_loss = 0
-            batch_count = 0
-            
-            for batch_X, batch_y in train_loader:
-                optimizer.zero_grad()
-                outputs = model(batch_X)
-                
-                # Pérdida principal
-                loss = criterion(outputs, batch_y)
-                
-                # Regularización L1 y L2 adicional extrema
-                l1_reg = torch.tensor(0., device=self.device)
-                l2_reg = torch.tensor(0., device=self.device)
-                for param in model.parameters():
-                    l1_reg += torch.norm(param, 1)
-                    l2_reg += torch.norm(param, 2)
-                
-                loss += 0.001 * l1_reg + 0.001 * l2_reg  # Regularización muy alta
-                
-                loss.backward()
-                
-                # Gradient clipping ULTRA agresivo
-                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=0.1)
-                optimizer.step()
-                
-                epoch_loss += loss.item()
-                batch_count += 1
-            
-            # Validación cada época
-            model.eval()
-            with torch.no_grad():
-                val_outputs = model(X_val_tensor)
-                val_loss = criterion(val_outputs, y_val_tensor).item()
-            
-            scheduler.step(val_loss)
-            
-            # Early stopping ultra agresivo
-            if val_loss < best_val_loss:
-                best_val_loss = val_loss
-                patience_counter = 0
-                best_model_state = model.state_dict().copy()
-            else:
-                patience_counter += 1
-                
-            # Parar muy temprano si hay signos de overfitting
-            avg_train_loss = epoch_loss / batch_count
-            if patience_counter >= patience or (avg_train_loss < val_loss * 0.7 and epoch > 5):
-                break
-            
-            model.train()
-        
-        # Cargar mejor modelo
-        if 'best_model_state' in locals():
-            model.load_state_dict(best_model_state)
-        
-        return model
-    
     def _calculate_accuracy(self, y_true: np.ndarray, y_pred: np.ndarray, tolerance: float = 3.0) -> float:
         """Calcula precisión con tolerancia de puntos (±3 puntos para mayor exigencia)"""
         return np.mean(np.abs(y_true - y_pred) <= tolerance) * 100
@@ -1197,7 +1192,9 @@ class NBATotalPointsPredictor:
         # Análisis de overfitting mejorado
         mae_diff = abs(train_metrics['mae'] - val_metrics['mae'])
         r2_diff = abs(train_metrics['r2'] - val_metrics['r2'])
-        cv_stability = cv_metrics['std_mae'] / cv_metrics['mean_mae']
+        cv_stability = cv_metrics['std_mae'] / cv_metrics['mean_mae'] if cv_metrics['mean_mae'] > 0 else 0
+        acc_cv = cv_metrics['std_accuracy'] / cv_metrics['mean_accuracy'] if cv_metrics['mean_accuracy'] > 0 else 0
+        r2_cv = cv_metrics['std_r2'] / cv_metrics['mean_r2'] if cv_metrics['mean_r2'] > 0 else 0
         
         print(f"\n🔍 ANÁLISIS DE ROBUSTEZ:")
         print(f"Estabilidad CV (std/mean): {cv_stability:.3f}")
@@ -1264,13 +1261,6 @@ class NBATotalPointsPredictor:
         print(f"Precisión CV: {cv_acc:.2f}% ± {cv_metrics['std_accuracy']:.2f}%")
         print(f"Precisión Final: {final_acc:.2f}%")
         
-        # Mejora respecto al modelo anterior
-        print(f"\n📈 MEJORAS IMPLEMENTADAS:")
-        print("✅ Eliminada red neuronal problemática (5% acc)")
-        print("✅ Optimizados hiperparámetros de modelos base")
-        print("✅ Agregadas features NBA específicas avanzadas")
-        print("✅ Pesos ensemble basados en rendimiento real")
-        print("✅ Límites de predicción más realistas")
         
         if cv_acc >= 97.0 and final_acc >= 97.0:
             print(f"✅ OBJETIVO ALCANZADO: Ambas métricas >= 97%")
@@ -1343,107 +1333,6 @@ class NBATotalPointsPredictor:
         except Exception as e:
             print(f"Error calculando importancia: {e}")
     
-    def _create_direct_correlation_predictor(self, df_features: pd.DataFrame, team1: str, team2: str, is_team1_home: bool = True) -> float:
-        """
-        PREDICTOR DIRECTO MATEMÁTICO ULTRA-OPTIMIZADO
-        Método revolucionario basado en correlaciones puras 
-        """
-        try:
-            # Filtrar datos del matchup específico usando 'Team' 
-            team1_data = df_features[df_features['Team'] == team1].copy()
-            team2_data = df_features[df_features['Team'] == team2].copy()
-            
-            if team1_data.empty or team2_data.empty:
-                logger.warning(f"Datos insuficientes para {team1} vs {team2}")
-                return 220.0  # Promedio NBA conservador
-            
-            # MÉTODO 1: ENSEMBLE PROJECTION V1 (correlación 0.7407) - PESO 40%
-            method1_pred = 220.0
-            if 'ensemble_projection_v1' in df_features.columns:
-                team1_proj = team1_data['ensemble_projection_v1'].iloc[-1] if not team1_data.empty else 110
-                team2_proj = team2_data['ensemble_projection_v1'].iloc[-1] if not team2_data.empty else 110
-                method1_pred = team1_proj + team2_proj
-            
-            # MÉTODO 2: DIRECT SCORING PROJECTION (correlación 0.7138) - PESO 30%
-            method2_pred = 220.0
-            if 'direct_scoring_projection' in df_features.columns:
-                team1_direct = team1_data['direct_scoring_projection'].iloc[-1] if not team1_data.empty else 110
-                team2_direct = team2_data['direct_scoring_projection'].iloc[-1] if not team2_data.empty else 110
-                method2_pred = team1_direct + team2_direct
-            
-            # MÉTODO 3: WEIGHTED SHOT VOLUME (correlación 0.6953) - PESO 20%
-            method3_pred = 220.0
-            if 'weighted_shot_volume' in df_features.columns:
-                team1_shots = team1_data['weighted_shot_volume'].iloc[-1] if not team1_data.empty else 110
-                team2_shots = team2_data['weighted_shot_volume'].iloc[-1] if not team2_data.empty else 110
-                method3_pred = team1_shots + team2_shots
-            
-            # MÉTODO 4: FG% + FGA COMBINADO (correlación 0.4884) - PESO 10%
-            method4_pred = 220.0
-            if 'FG%' in df_features.columns and 'FGA' in df_features.columns:
-                team1_fg_pct = team1_data['FG%'].iloc[-1] if not team1_data.empty else 0.45
-                team1_fga = team1_data['FGA'].iloc[-1] if not team1_data.empty else 85
-                team2_fg_pct = team2_data['FG%'].iloc[-1] if not team2_data.empty else 0.45
-                team2_fga = team2_data['FGA'].iloc[-1] if not team2_data.empty else 85
-                
-                team1_pts = team1_fg_pct * team1_fga * 2.2  # Factor NBA promedio
-                team2_pts = team2_fg_pct * team2_fga * 2.2
-                
-                method4_pred = team1_pts + team2_pts
-            
-            # COMBINACIÓN PONDERADA POR CORRELACIÓN REAL
-            weights = [0.40, 0.30, 0.20, 0.10]  # Basado en correlaciones
-            predictions = [method1_pred, method2_pred, method3_pred, method4_pred]
-            
-            # Validar predicciones en rango NBA
-            valid_predictions = []
-            valid_weights = []
-            
-            for pred, weight in zip(predictions, weights):
-                if 180 <= pred <= 280:  # Rango NBA válido
-                    valid_predictions.append(pred)
-                    valid_weights.append(weight)
-                else:
-                    # Ajustar predicciones fuera de rango
-                    adjusted_pred = np.clip(pred, 200, 260)
-                    valid_predictions.append(adjusted_pred)
-                    valid_weights.append(weight * 0.5)  # Penalizar peso
-            
-            # Normalizar pesos
-            total_weight = sum(valid_weights)
-            if total_weight > 0:
-                valid_weights = [w / total_weight for w in valid_weights]
-            else:
-                valid_weights = [0.25] * 4  # Pesos iguales como fallback
-            
-            # Predicción final ponderada
-            final_prediction = sum(pred * weight for pred, weight in zip(valid_predictions, valid_weights))
-            
-            # AJUSTE POR VENTAJA LOCAL (factor crítico NBA)
-            home_advantage = 2.5 if is_team1_home else -2.5
-            final_prediction += home_advantage
-            
-            # AJUSTE POR PACE Y DEFENSIVE RATING (si disponible)
-            pace_adjustment = 0
-            if 'PACE' in df_features.columns:
-                team1_pace = team1_data['PACE'].iloc[-1] if not team1_data.empty else 100
-                team2_pace = team2_data['PACE'].iloc[-1] if not team2_data.empty else 100
-                avg_pace = (team1_pace + team2_pace) / 2
-                pace_adjustment = (avg_pace - 100) * 0.8  # Factor de ajuste
-            
-            final_prediction += pace_adjustment
-            
-            # LÍMITES FINALES NBA ESTRICTOS
-            final_prediction = np.clip(final_prediction, 190, 270)
-            
-            logger.info(f"Predictor directo: {final_prediction:.1f} (M1:{method1_pred:.1f}, M2:{method2_pred:.1f}, M3:{method3_pred:.1f}, M4:{method4_pred:.1f})")
-            
-            return float(final_prediction)
-            
-        except Exception as e:
-            logger.error(f"Error en predictor directo: {e}")
-            return 220.0  # Fallback seguro
-
     def _create_ultra_hybrid_predictor(self, df_features: pd.DataFrame, team1: str, team2: str, 
                                      base_predictions: Dict, neural_pred: float, 
                                      is_team1_home: bool = True) -> Tuple[float, float, Dict]:
@@ -1453,7 +1342,9 @@ class NBATotalPointsPredictor:
         """
         try:
             # 1. PREDICTOR DIRECTO MATEMÁTICO (85% peso)
-            direct_pred = self._create_direct_correlation_predictor(df_features, team1, team2, is_team1_home)
+            direct_pred = self._create_mathematical_predictor_unified(
+                df_features, team1, team2, None, None, is_team1_home, 'correlation_based'
+            )
             
             # 2. ENSEMBLE ML OPTIMIZADO (15% peso)
             # Filtrar solo los mejores modelos (>50% precisión histórica)
@@ -1551,7 +1442,9 @@ class NBATotalPointsPredictor:
         except Exception as e:
             logger.error(f"Error en predictor híbrido: {e}")
             # Fallback al predictor directo
-            direct_fallback = self._create_direct_correlation_predictor(df_features, team1, team2, is_team1_home)
+            direct_fallback = self._create_mathematical_predictor_unified(
+                df_features, team1, team2, None, None, is_team1_home, 'fallback'
+            )
             return float(direct_fallback), 70.0, {'error': str(e), 'fallback': direct_fallback}
     
     def predict(self, team1: str, team2: str, teams_data: pd.DataFrame, 
@@ -1747,8 +1640,8 @@ class NBATotalPointsPredictor:
             ensemble_prediction = float(np.clip(ensemble_prediction, 200, 250))
             
             # 3. PREDICTOR MATEMÁTICO DIRECTO (ALTA PRECISIÓN)
-            mathematical_pred = self._create_advanced_mathematical_predictor(
-                team1_recent, team2_recent, is_team1_home
+            mathematical_pred = self._create_mathematical_predictor_unified(
+                df_features, team1_str, team2_str, team1_recent, team2_recent, is_team1_home
             )
             
             # 4. COMBINACIÓN HÍBRIDA ULTRA-OPTIMIZADA
@@ -1799,27 +1692,157 @@ class NBATotalPointsPredictor:
             logger.error(f"Error crítico en predicción: {e}")
             return self._create_emergency_fallback_prediction(team1_str, team2_str)
 
-    def _create_mathematical_fallback_predictor(self, df_features: pd.DataFrame) -> float:
-        """Predictor matemático robusto basado en correlaciones directas"""
+    def _create_mathematical_predictor_unified(self, df_features: pd.DataFrame = None, 
+                                             team1: str = None, team2: str = None,
+                                             team1_stats: pd.Series = None, team2_stats: pd.Series = None,
+                                             is_team1_home: bool = True,
+                                             prediction_method: str = 'comprehensive') -> float:
+        """
+        PREDICTOR MATEMÁTICO UNIFICADO
+        
+        Args:
+            prediction_method: 'comprehensive', 'correlation_based', 'stats_based', 'fallback'
+            df_features: DataFrame completo con features (para correlation_based)
+            team1/team2: Nombres de equipos (para correlation_based)
+            team1_stats/team2_stats: Series con estadísticas (para stats_based)
+            is_team1_home: Ventaja de local
+        """
+        
         try:
-            # Usar features más correlacionadas con puntos totales
-            if 'ensemble_projection_v1' in df_features.columns:
-                return df_features['ensemble_projection_v1'].tail(10).mean()
-            elif 'PTS' in df_features.columns and 'PTS_Opp' in df_features.columns:
-                recent_total = (df_features['PTS'] + df_features['PTS_Opp']).tail(10).mean()
-                return np.clip(recent_total, 200, 240)
-            else:
-                return 215.0  # Promedio NBA histórico
-        except:
-            return 215.0
-
-    def _create_advanced_mathematical_predictor(self, team1_stats: pd.Series, 
-                                              team2_stats: pd.Series, 
-                                              is_team1_home: bool) -> float:
-        """Predictor matemático avanzado para 97% precisión"""
-        try:
-            # COMPONENTES MATEMÁTICOS CRÍTICOS
+            if prediction_method == 'comprehensive':
+                # MÉTODO COMPREHENSIVO: Combina todos los enfoques disponibles
+                predictions = []
+                weights = []
+                
+                # 1. Predicción basada en correlaciones (si hay datos)
+                if df_features is not None and team1 and team2:
+                    corr_pred = self._correlation_based_prediction(df_features, team1, team2, is_team1_home)
+                    if corr_pred > 0:
+                        predictions.append(corr_pred)
+                        weights.append(0.5)  # 50% peso
+                
+                # 2. Predicción basada en estadísticas (si hay datos)
+                if team1_stats is not None and team2_stats is not None:
+                    stats_pred = self._stats_based_prediction(team1_stats, team2_stats, is_team1_home)
+                    if stats_pred > 0:
+                        predictions.append(stats_pred)
+                        weights.append(0.3)  # 30% peso
+                
+                # 3. Predicción de fallback
+                fallback_pred = self._fallback_prediction(df_features)
+                predictions.append(fallback_pred)
+                weights.append(0.2)  # 20% peso
+                
+                # Combinar predicciones
+                if len(predictions) > 1:
+                    # Normalizar pesos
+                    total_weight = sum(weights)
+                    weights = [w / total_weight for w in weights]
+                    final_pred = sum(pred * weight for pred, weight in zip(predictions, weights))
+                else:
+                    final_pred = predictions[0] if predictions else 220.0
+                
+                return np.clip(final_pred, 195, 265)
             
+            elif prediction_method == 'correlation_based':
+                return self._correlation_based_prediction(df_features, team1, team2, is_team1_home)
+            
+            elif prediction_method == 'stats_based':
+                return self._stats_based_prediction(team1_stats, team2_stats, is_team1_home)
+            
+            elif prediction_method == 'fallback':
+                return self._fallback_prediction(df_features)
+            
+            else:
+                logger.warning(f"Método desconocido: {prediction_method}, usando fallback")
+                return self._fallback_prediction(df_features)
+                
+        except Exception as e:
+            logger.error(f"Error en predictor matemático unificado: {e}")
+            return 220.0
+    
+    def _correlation_based_prediction(self, df_features: pd.DataFrame, team1: str, team2: str, is_team1_home: bool) -> float:
+        """Predicción basada en correlaciones directas con features"""
+        try:
+            # Filtrar datos de equipos
+            team1_data = df_features[df_features['Team'] == team1].copy()
+            team2_data = df_features[df_features['Team'] == team2].copy()
+            
+            if team1_data.empty or team2_data.empty:
+                return 0.0  # Indicar que no hay datos
+            
+            # MÉTODOS ORDENADOS POR CORRELACIÓN CON TARGET
+            methods = []
+            
+            # Método 1: Ensemble Projection (correlación alta)
+            if 'ensemble_projection_v1' in df_features.columns:
+                team1_proj = team1_data['ensemble_projection_v1'].iloc[-1] if not team1_data.empty else 110
+                team2_proj = team2_data['ensemble_projection_v1'].iloc[-1] if not team2_data.empty else 110
+                methods.append(('ensemble_projection', team1_proj + team2_proj, 0.4))
+            
+            # Método 2: Direct Scoring Projection
+            if 'direct_scoring_projection' in df_features.columns:
+                team1_direct = team1_data['direct_scoring_projection'].iloc[-1] if not team1_data.empty else 110
+                team2_direct = team2_data['direct_scoring_projection'].iloc[-1] if not team2_data.empty else 110
+                methods.append(('direct_scoring', team1_direct + team2_direct, 0.3))
+            
+            # Método 3: Weighted Shot Volume
+            if 'weighted_shot_volume' in df_features.columns:
+                team1_shots = team1_data['weighted_shot_volume'].iloc[-1] if not team1_data.empty else 110
+                team2_shots = team2_data['weighted_shot_volume'].iloc[-1] if not team2_data.empty else 110
+                methods.append(('shot_volume', team1_shots + team2_shots, 0.2))
+            
+            # Método 4: FG% + FGA básico
+            if 'FG%' in df_features.columns and 'FGA' in df_features.columns:
+                team1_fg_pct = team1_data['FG%'].iloc[-1] if not team1_data.empty else 0.45
+                team1_fga = team1_data['FGA'].iloc[-1] if not team1_data.empty else 85
+                team2_fg_pct = team2_data['FG%'].iloc[-1] if not team2_data.empty else 0.45
+                team2_fga = team2_data['FGA'].iloc[-1] if not team2_data.empty else 85
+                
+                team1_pts = team1_fg_pct * team1_fga * 2.2  # Factor NBA promedio
+                team2_pts = team2_fg_pct * team2_fga * 2.2
+                methods.append(('fg_basic', team1_pts + team2_pts, 0.1))
+            
+            # Combinar métodos disponibles
+            if not methods:
+                return 0.0
+            
+            # Filtrar predicciones válidas y combinar
+            valid_methods = [(name, pred, weight) for name, pred, weight in methods if 180 <= pred <= 280]
+            
+            if not valid_methods:
+                # Ajustar predicciones fuera de rango
+                adjusted_methods = [(name, np.clip(pred, 200, 260), weight * 0.5) for name, pred, weight in methods]
+                valid_methods = adjusted_methods
+            
+            # Normalizar pesos y combinar
+            total_weight = sum(weight for _, _, weight in valid_methods)
+            if total_weight > 0:
+                prediction = sum(pred * (weight / total_weight) for _, pred, weight in valid_methods)
+            else:
+                prediction = np.mean([pred for _, pred, _ in valid_methods])
+            
+            # Ajustes contextuales
+            home_advantage = 2.5 if is_team1_home else -2.5
+            prediction += home_advantage
+            
+            # Ajuste por pace si disponible
+            if 'PACE' in df_features.columns:
+                team1_pace = team1_data['PACE'].iloc[-1] if not team1_data.empty else 100
+                team2_pace = team2_data['PACE'].iloc[-1] if not team2_data.empty else 100
+                avg_pace = (team1_pace + team2_pace) / 2
+                pace_adjustment = (avg_pace - 100) * 0.8
+                prediction += pace_adjustment
+            
+            return np.clip(prediction, 190, 270)
+            
+        except Exception as e:
+            logger.debug(f"Error en predicción por correlación: {e}")
+            return 0.0
+    
+    def _stats_based_prediction(self, team1_stats: pd.Series, team2_stats: pd.Series, is_team1_home: bool) -> float:
+        """Predicción basada en estadísticas de equipos"""
+        try:
             # 1. Proyección directa de scoring
             if 'direct_scoring_projection' in team1_stats.index:
                 scoring_proj = team1_stats['direct_scoring_projection'] + team2_stats['direct_scoring_projection']
@@ -1829,30 +1852,46 @@ class NBATotalPointsPredictor:
                 pts2 = team2_stats.get('PTS', 110)
                 scoring_proj = pts1 + pts2
             
-            # 2. Ajuste por eficiencia de tiro
+            # 2. Factor de eficiencia
             efficiency_factor = 1.0
             if 'FG%' in team1_stats.index:
                 avg_fg_pct = (team1_stats['FG%'] + team2_stats['FG%']) / 2
                 efficiency_factor = 0.8 + (avg_fg_pct * 0.4)  # Rango 0.8-1.2
             
-            # 3. Ajuste por volumen de tiros
+            # 3. Factor de volumen
             volume_factor = 1.0
             if 'total_expected_shots' in team1_stats.index:
                 total_shots = team1_stats['total_expected_shots'] + team2_stats['total_expected_shots']
-                volume_factor = 0.9 + (total_shots / 200) * 0.2  # Normalizar por shots típicos
+                volume_factor = 0.9 + (total_shots / 200) * 0.2
             
-            # 4. Ajuste por ventaja de local
+            # 4. Ventaja de local
             home_advantage = 3.2 if is_team1_home else -3.2
             
-            # 5. Combinación matemática optimizada
-            mathematical_prediction = (scoring_proj * efficiency_factor * volume_factor) + home_advantage
+            # 5. Combinación final
+            prediction = (scoring_proj * efficiency_factor * volume_factor) + home_advantage
             
-            # Aplicar límites más conservadores
-            return np.clip(mathematical_prediction, 200, 250)
+            return np.clip(prediction, 200, 250)
             
         except Exception as e:
-            logger.warning(f"Error en predictor matemático: {e}")
-            return 220.0
+            logger.debug(f"Error en predicción por estadísticas: {e}")
+            return 0.0
+    
+    def _fallback_prediction(self, df_features: pd.DataFrame = None) -> float:
+        """Predicción de fallback robusta"""
+        try:
+            if df_features is not None:
+                # Usar features más correlacionadas disponibles
+                if 'ensemble_projection_v1' in df_features.columns:
+                    return df_features['ensemble_projection_v1'].tail(10).mean()
+                elif 'PTS' in df_features.columns and 'PTS_Opp' in df_features.columns:
+                    recent_total = (df_features['PTS'] + df_features['PTS_Opp']).tail(10).mean()
+                    return np.clip(recent_total, 200, 240)
+            
+            # Promedio NBA histórico como último recurso
+            return 215.0
+            
+        except Exception:
+            return 215.0
 
     def _calculate_prediction_confidence(self, base_predictions: Dict, 
                                        mathematical_pred: float, 
