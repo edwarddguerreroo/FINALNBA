@@ -5,14 +5,12 @@ Modelo Avanzado de Predicción de Puntos de Equipo NBA
 Este módulo implementa un sistema de predicción de alto rendimiento para
 puntos de equipo NBA utilizando:
 
-1. Ensemble Learning con múltiples algoritmos ML
+1. Ensemble Learning con múltiples algoritmos ML y Red Neuronal
 2. Stacking avanzado con meta-modelo optimizado
 3. Optimización automática de hiperparámetros
 4. Validación cruzada rigurosa
 5. Métricas de evaluación exhaustivas
 6. Feature engineering especializado
-
-Arquitectura diseñada para alcanzar 97%+ de precisión predictiva.
 """
 
 import pandas as pd
@@ -21,6 +19,9 @@ from typing import List, Dict, Tuple, Optional, Any
 import logging
 from datetime import datetime, timedelta
 import warnings
+import os
+import joblib
+import pickle
 warnings.filterwarnings('ignore')
 
 # ML Libraries
@@ -33,13 +34,392 @@ from sklearn.model_selection import (GridSearchCV, RandomizedSearchCV,
 from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
 from sklearn.preprocessing import StandardScaler, MinMaxScaler
 from sklearn.pipeline import Pipeline
+from sklearn.base import BaseEstimator, RegressorMixin
 import xgboost as xgb
 import lightgbm as lgb
+
+# DL Libraries
+import torch
+import torch.nn as nn
+import torch.optim as optim
+from torch.utils.data import DataLoader, TensorDataset
+import torch.nn.functional as F
 
 # Feature Engineering
 from .features_teams_points import TeamPointsFeatureEngineer
 
 logger = logging.getLogger(__name__)
+
+class NBATeamPointsNet(nn.Module):
+    """
+    Red Neuronal Avanzada para Predicción de Puntos de Equipo NBA
+    
+    Arquitectura optimizada sin muchas capas pero con regularización agresiva:
+    - Input Layer
+    - 2 Hidden Layers con Layer Normalization y Dropout (más robusto que BatchNorm)
+    - Output Layer
+    - Skip connections para mejor flujo de gradientes
+    """
+    
+    def __init__(self, input_size: int, hidden_size: int = 128):
+        super(NBATeamPointsNet, self).__init__()
+        
+        # Arquitectura compacta pero efectiva
+        self.input_layer = nn.Linear(input_size, hidden_size)
+        self.ln1 = nn.LayerNorm(hidden_size)  # LayerNorm en lugar de BatchNorm
+        self.dropout1 = nn.Dropout(0.3)  # Regularización agresiva
+        
+        self.hidden1 = nn.Linear(hidden_size, hidden_size // 2)
+        self.ln2 = nn.LayerNorm(hidden_size // 2)  # LayerNorm en lugar de BatchNorm
+        self.dropout2 = nn.Dropout(0.4)  
+        
+        self.hidden2 = nn.Linear(hidden_size // 2, hidden_size // 4)
+        self.ln3 = nn.LayerNorm(hidden_size // 4)  # LayerNorm en lugar de BatchNorm
+        self.dropout3 = nn.Dropout(0.2)
+        
+        # Skip connection layer
+        self.skip_layer = nn.Linear(input_size, hidden_size // 4)
+        
+        # Output layer
+        self.output = nn.Linear(hidden_size // 4, 1)
+        
+        # Inicialización de pesos optimizada para regresión
+        self._initialize_weights()
+    
+    def _initialize_weights(self):
+        """Inicialización optimizada de pesos para predicción NBA"""
+        for m in self.modules():
+            if isinstance(m, nn.Linear):
+                # Xavier initialization para mejor convergencia
+                nn.init.xavier_normal_(m.weight)
+                if m.bias is not None:
+                    nn.init.constant_(m.bias, 0)
+    
+    def forward(self, x):
+        """Forward pass con skip connections y LayerNorm robusto"""
+        # Guardar input para skip connection
+        skip = self.skip_layer(x)
+        
+        # Capas principales con LayerNorm (funciona con cualquier batch size)
+        x = F.relu(self.ln1(self.input_layer(x)))
+        x = self.dropout1(x)
+        
+        x = F.relu(self.ln2(self.hidden1(x)))
+        x = self.dropout2(x)
+        
+        x = F.relu(self.ln3(self.hidden2(x)))
+        x = self.dropout3(x)
+        
+        # Skip connection para mejor flujo de gradientes
+        x = x + skip
+        
+        # Output final
+        x = self.output(x)
+        
+        return x
+
+class PyTorchNBARegressor(RegressorMixin):
+    """
+    Wrapper de PyTorch para integración con scikit-learn y stacking
+    
+    Implementa una red neuronal optimizada para predicción de puntos NBA
+    con regularización agresiva y entrenamiento robusto.
+    Hereda solo de RegressorMixin para evitar conflictos con BaseEstimator.
+    """
+    
+    def __init__(self, hidden_size=128, epochs=150, batch_size=32, 
+                 learning_rate=0.001, weight_decay=0.01, early_stopping_patience=15):
+        self.hidden_size = hidden_size
+        self.epochs = epochs
+        self.batch_size = batch_size
+        self.learning_rate = learning_rate
+        self.weight_decay = weight_decay  # Regularización L2
+        self.early_stopping_patience = early_stopping_patience
+        
+        self.model = None
+        self.scaler = StandardScaler()
+        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        
+        # Para early stopping
+        self.best_loss = float('inf')
+        self.patience_counter = 0
+        self.best_model_state = None
+    
+    @property
+    def _estimator_type(self):
+        """Identifica este estimador como regresor para sklearn"""
+        return "regressor"
+    
+    def _check_n_features(self, X, reset):
+        """Método para compatibilidad con sklearn - verifica número de features"""
+        pass  # Implementación mínima
+    
+    def score(self, X, y, sample_weight=None):
+        """Calcula R² score para compatibilidad con sklearn"""
+        if self.model is None:
+            raise ValueError("El modelo debe ser entrenado primero")
+        y_pred = self.predict(X)
+        return r2_score(y, y_pred, sample_weight=sample_weight)
+    
+    def fit(self, X, y):
+        """Entrenamiento de la red neuronal con regularización agresiva y EARLY STOPPING AVANZADO"""
+        # Convertir a numpy arrays si es necesario
+        if hasattr(X, 'values'):
+            X = X.values
+        if hasattr(y, 'values'):
+            y = y.values
+        
+        X = np.asarray(X, dtype=np.float32)
+        y = np.asarray(y, dtype=np.float32)
+        
+        # Preparar datos
+        X_scaled = self.scaler.fit_transform(X)
+        
+        # DIVISIÓN TRAIN/VAL PARA EARLY STOPPING 
+        val_size = 0.15  # 15% para validación interna
+        val_split = int(len(X_scaled) * (1 - val_size))
+        
+        # Asegurar que tenemos suficientes datos para entrenamiento
+        if val_split < 2:
+            val_split = max(2, len(X_scaled) - 1)
+        
+        X_train = X_scaled[:val_split]
+        X_val = X_scaled[val_split:]
+        y_train = y[:val_split]
+        y_val = y[val_split:]
+        
+        # Ajustar batch_size si es necesario
+        effective_batch_size = min(self.batch_size, len(X_train))
+        if effective_batch_size < 2:
+            effective_batch_size = len(X_train)  # Usar todo como un batch
+        
+        # Convertir a tensores de PyTorch
+        X_train_tensor = torch.FloatTensor(X_train).to(self.device)
+        y_train_tensor = torch.FloatTensor(y_train).view(-1, 1).to(self.device)
+        X_val_tensor = torch.FloatTensor(X_val).to(self.device)
+        y_val_tensor = torch.FloatTensor(y_val).view(-1, 1).to(self.device)
+        
+        # Crear dataset y dataloader solo para entrenamiento
+        train_dataset = TensorDataset(X_train_tensor, y_train_tensor)
+        train_dataloader = DataLoader(train_dataset, batch_size=effective_batch_size, shuffle=True)
+        
+        # Crear modelo
+        input_size = X_scaled.shape[1]
+        self.model = NBATeamPointsNet(input_size, self.hidden_size).to(self.device)
+        
+        # Optimizador con regularización L2 agresiva
+        optimizer = optim.AdamW(
+            self.model.parameters(), 
+            lr=self.learning_rate, 
+            weight_decay=self.weight_decay,  # L2 regularization
+            betas=(0.9, 0.999),
+            eps=1e-8
+        )
+        
+        # Scheduler para learning rate dinámico
+        scheduler = optim.lr_scheduler.ReduceLROnPlateau(
+            optimizer, mode='min', factor=0.7, patience=8
+        )
+        
+        # Función de pérdida robusta
+        criterion = nn.SmoothL1Loss()  # Más robusta que MSE para outliers
+        
+        # EARLY STOPPING - Variables de control
+        self.best_loss = float('inf')
+        self.patience_counter = 0
+        self.best_model_state = None
+        best_val_loss = float('inf')
+        train_losses = []
+        val_losses = []
+        learning_rates = []
+        
+        # ENTRENAMIENTO CON EARLY STOPPING Y VALIDACIÓN DEDICADA
+        logger.info(f"Iniciando entrenamiento red neuronal - Train: {len(X_train)}, Val: {len(X_val)}")
+        
+        for epoch in range(self.epochs):
+            # FASE DE ENTRENAMIENTO
+            self.model.train()
+            epoch_train_loss = 0.0
+            train_batch_count = 0
+            
+            for batch_X, batch_y in train_dataloader:
+                optimizer.zero_grad()
+                
+                # Forward pass
+                outputs = self.model(batch_X)
+                loss = criterion(outputs, batch_y)
+                
+                # Backward pass
+                loss.backward()
+                
+                # Gradient clipping para estabilidad
+                torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
+                
+                optimizer.step()
+                
+                epoch_train_loss += loss.item()
+                train_batch_count += 1
+            
+            avg_train_loss = epoch_train_loss / train_batch_count
+            
+            # FASE DE VALIDACIÓN
+            self.model.eval()
+            with torch.no_grad():
+                val_outputs = self.model(X_val_tensor)
+                val_loss = criterion(val_outputs, y_val_tensor).item()
+            
+            # Actualizar scheduler con pérdida de validación
+            scheduler.step(val_loss)
+            current_lr = optimizer.param_groups[0]['lr']
+            
+            # Guardar métricas
+            train_losses.append(avg_train_loss)
+            val_losses.append(val_loss)
+            learning_rates.append(current_lr)
+            
+            # EARLY STOPPING LOGIC MEJORADO
+            improvement = False
+            
+            # Criterio de mejora: tolerancia absoluta más realista
+            improvement_threshold = 0.01  # Mejora mínima absoluta requerida (más permisiva)
+            if val_loss < (best_val_loss - improvement_threshold):
+                best_val_loss = val_loss
+                self.best_loss = val_loss
+                self.patience_counter = 0
+                improvement = True
+                
+                # Guardar mejor estado del modelo
+                self.best_model_state = self.model.state_dict().copy()
+                
+                if epoch % 10 == 0 or epoch < 10:
+                    logger.info(f"Epoca {epoch+1:3d}: Train={avg_train_loss:.4f}, Val={val_loss:.4f} [MEJOR] LR={current_lr:.6f}")
+            else:
+                self.patience_counter += 1
+                
+                if epoch % 10 == 0 or epoch < 10:
+                    logger.info(f"Epoca {epoch+1:3d}: Train={avg_train_loss:.4f}, Val={val_loss:.4f} [{self.patience_counter}/{self.early_stopping_patience}] LR={current_lr:.6f}")
+            
+            # Condiciones de parada temprana - MÁS INTELIGENTES
+            early_stop_triggered = False
+            
+            # 1. Patience exceeded
+            if self.patience_counter >= self.early_stopping_patience:
+                logger.info(f"Early stopping por patience ({self.early_stopping_patience} epocas sin mejora)")
+                early_stop_triggered = True
+            
+            # 2. Convergencia excelente alcanzada
+            elif val_loss < 0.5:  
+                logger.info(f"Early stopping por convergencia excelente (val_loss={val_loss:.4f})")
+                early_stop_triggered = True
+            
+            # 3. Learning rate extremadamente bajo
+            elif current_lr < 5e-7:  # Más permisivo 
+                logger.info(f"Early stopping por learning rate muy bajo ({current_lr:.2e})")
+                early_stop_triggered = True
+            
+            # 4. Plateau detectado - pérdida se estanca por mucho tiempo
+            elif len(val_losses) >= 20:
+                recent_losses = val_losses[-20:]
+                loss_std = np.std(recent_losses)
+                loss_mean = np.mean(recent_losses)
+                if loss_std / loss_mean < 0.005:  # Variación < 0.5%
+                    logger.info(f"Early stopping por plateau detectado (variacion={loss_std/loss_mean:.4f})")
+                    early_stop_triggered = True
+            
+            if early_stop_triggered:
+                break
+        
+        if self.best_model_state is not None:
+            self.model.load_state_dict(self.best_model_state)
+            logger.info(f"Modelo restaurado al mejor estado (epoca con val_loss={self.best_loss:.4f})")
+        else:
+            logger.warning("No se encontro mejor estado del modelo")
+        
+        # Análisis de convergencia 
+        final_epoch = len(train_losses)
+        min_val_loss = min(val_losses)
+        initial_val_loss = val_losses[0] if val_losses else min_val_loss
+        final_val_loss = val_losses[-1] if val_losses else min_val_loss
+        
+        # Calcular mejora total y estabilidad final
+        total_improvement = (initial_val_loss - min_val_loss) / initial_val_loss if initial_val_loss > 0 else 0
+        final_stability = abs(final_val_loss - min_val_loss) / min_val_loss if min_val_loss > 0 else 0
+        
+        # Clasificación más inteligente
+        converged_well = final_stability < 0.1 and total_improvement > 0.5  # Mejoró 50%+ y es estable
+        
+        logger.info(f"ENTRENAMIENTO COMPLETADO:")
+        logger.info(f"   • Epocas totales: {final_epoch}/{self.epochs}")
+        logger.info(f"   • Val_loss inicial: {initial_val_loss:.4f}")
+        logger.info(f"   • Mejor val_loss: {min_val_loss:.4f}")
+        logger.info(f"   • Val_loss final: {final_val_loss:.4f}")
+        logger.info(f"   • Mejora total: {total_improvement:.1%}")
+        logger.info(f"   • Estabilidad final: {final_stability:.1%}")
+        logger.info(f"   • LR final: {learning_rates[-1]:.2e}")
+        
+        # Clasificar calidad del entrenamiento
+        if converged_well and min_val_loss < 1.0:
+            logger.info(f"   • Calidad: EXCELENTE convergencia (loss<1.0, estable)")
+        elif total_improvement > 0.7 and final_stability < 0.2:
+            logger.info(f"   • Calidad: BUENA convergencia (mejora 70%+)")
+        elif total_improvement > 0.3 and final_stability < 0.5:
+            logger.info(f"   • Calidad: MODERADA convergencia (mejora 30%+)")
+        elif total_improvement > 0.1:
+            logger.info(f"   • Calidad: ACEPTABLE (mejora 10%+, revisar hiperparametros)")
+        else:
+            logger.info(f"   • Calidad: POBRE convergencia - Revisar arquitectura y datos")
+        
+        return self
+    
+    def predict(self, X):
+        """Predicción usando la red neuronal entrenada"""
+        if self.model is None:
+            raise ValueError("El modelo debe ser entrenado primero")
+        
+        # Convertir a numpy array si es necesario
+        if hasattr(X, 'values'):
+            X = X.values
+        X = np.asarray(X, dtype=np.float32)
+        
+        self.model.eval()
+        X_scaled = self.scaler.transform(X)
+        X_tensor = torch.FloatTensor(X_scaled).to(self.device)
+        
+        with torch.no_grad():
+            # Manejar predicción por batches para evitar problemas de memoria
+            if len(X_tensor) > 1000:
+                predictions = []
+                batch_size = 500
+                for i in range(0, len(X_tensor), batch_size):
+                    batch = X_tensor[i:i+batch_size]
+                    batch_pred = self.model(batch).cpu().numpy().flatten()
+                    predictions.extend(batch_pred)
+                predictions = np.array(predictions)
+            else:
+                predictions = self.model(X_tensor).cpu().numpy().flatten()
+        
+        # Aplicar límites realistas para puntos NBA
+        predictions = np.clip(predictions, 70, 140)
+        
+        return predictions
+    
+    def get_params(self, deep=True):
+        """Parámetros para compatibilidad con scikit-learn"""
+        return {
+            'hidden_size': self.hidden_size,
+            'epochs': self.epochs,
+            'batch_size': self.batch_size,
+            'learning_rate': self.learning_rate,
+            'weight_decay': self.weight_decay,
+            'early_stopping_patience': self.early_stopping_patience
+        }
+    
+    def set_params(self, **params):
+        """Configurar parámetros para compatibilidad con scikit-learn"""
+        for key, value in params.items():
+            if hasattr(self, key):
+                setattr(self, key, value)
+        return self
 
 class BaseNBATeamModel:
     """Clase base para modelos NBA de equipos con funcionalidades comunes."""
@@ -167,15 +547,25 @@ class TeamPointsModel(BaseNBATeamModel):
                 bootstrap=True,
                 min_weight_fraction_leaf=0.01,  # Regularización adicional
                 max_leaf_nodes=500       # Limitar complejidad del árbol
+            ),
+            
+            # RED NEURONAL para comparación individual
+            'pytorch_neural_net': PyTorchNBARegressor(
+                hidden_size=128,         # Arquitectura media para individual
+                epochs=100,              # Epocas para entrenamiento individual
+                batch_size=32,           # Batch size estándar
+                learning_rate=0.001,     # Learning rate estándar
+                weight_decay=0.01,       # Regularización L2 moderada
+                early_stopping_patience=15
             )
         }
         
         logger.info("Modelos base configurados con REGULARIZACIÓN AGRESIVA para mayor estabilidad")
     
     def _setup_stacking_model(self):
-        """Configura el modelo de stacking robusto con REGULARIZACIÓN MÁXIMA."""
+        """Configura el modelo de stacking robusto con REGULARIZACIÓN MÁXIMA + Red Neuronal mejorada."""
         
-        # Modelos base para stacking con REGULARIZACIÓN EXTREMA
+        # Modelos base para stacking con REGULARIZACIÓN EXTREMA + Neural Network MEJORADA
         base_models_stacking = [
             ('xgb_regularized', xgb.XGBRegressor(
                 n_estimators=150, max_depth=4, learning_rate=0.05,
@@ -203,6 +593,15 @@ class TeamPointsModel(BaseNBATeamModel):
                 n_estimators=100, max_depth=6, min_samples_split=20,
                 min_samples_leaf=10, max_features=0.5, max_leaf_nodes=300,
                 random_state=42, n_jobs=-1
+            )),
+            # Neural Network MEJORADA con compatibilidad sklearn completa
+            ('pytorch_nn', PyTorchNBARegressor(
+                hidden_size=96,           # Arquitectura compacta
+                epochs=100,               # Reducido para stacking
+                batch_size=64,            # Batch size apropiado
+                learning_rate=0.002,      # Learning rate conservador
+                weight_decay=0.02,        # Regularización L2 agresiva
+                early_stopping_patience=12
             ))
         ]
         
@@ -227,7 +626,7 @@ class TeamPointsModel(BaseNBATeamModel):
         self.base_models = dict(base_models_stacking)
         self.meta_model = meta_model
         
-        logger.info("Modelo de stacking configurado con REGULARIZACIÓN MÁXIMA (7-fold CV, Ridge α=10.0)")
+        logger.info("Modelo de stacking configurado con REGULARIZACIÓN MÁXIMA + Red Neuronal mejorada")
     
     def get_feature_columns(self, df: pd.DataFrame) -> List[str]:
         """
@@ -303,7 +702,7 @@ class TeamPointsModel(BaseNBATeamModel):
             logger.info(f"Entrenando {name}...")
             
             # Optimización de hiperparámetros si está habilitada
-            if self.optimize_hyperparams and name in ['xgboost', 'lightgbm']:
+            if self.optimize_hyperparams and name in ['xgboost', 'lightgbm', 'pytorch_neural_net']:
                 model = self._optimize_model_hyperparams(model, X_train_scaled, y_train, name)
             
             # Entrenar modelo
@@ -325,10 +724,16 @@ class TeamPointsModel(BaseNBATeamModel):
             logger.info(f"{name} - MAE: {mae_val:.3f}, R²: {r2_val:.4f}")
         
         # Entrenar ensemble voting
-        logger.info("Entrenando ensemble voting...")
-        voting_regressor = VotingRegressor([
-            (name, model) for name, model in self.trained_models.items()
-        ])
+        logger.info("Entrenando ensemble voting con Red Neuronal...")
+        # Usar TODOS los modelos incluyendo PyTorch con compatibilidad mejorada
+        voting_models = [(name, model) for name, model in self.trained_models.items()]
+        
+        if len(voting_models) == 0:
+            logger.warning("No hay modelos válidos para voting - usando solo el primer modelo disponible")
+            voting_models = [list(self.trained_models.items())[0]]
+        
+        voting_regressor = VotingRegressor(voting_models)
+        logger.info(f"VotingRegressor creado con {len(voting_models)} modelos: {[name for name, _ in voting_models]}")
         voting_regressor.fit(X_train_scaled, y_train)
         self.trained_models['voting'] = voting_regressor
         
@@ -368,13 +773,17 @@ class TeamPointsModel(BaseNBATeamModel):
         self.is_trained = True
         logger.info("Entrenamiento completado exitosamente")
         
+        # Guardar el modelo final de producción
+        self.save_production_model()
+        
         return metrics
     
     def _optimize_model_hyperparams(self, model, X_train, y_train, model_name):
         """Optimiza hiperparámetros usando búsqueda aleatoria CONSERVADORA."""
+
         logger.info(f"Optimizando hiperparámetros para {model_name} con REGULARIZACIÓN AGRESIVA...")
         
-        # Parámetros para XGBoost - MÁS CONSERVADORES
+        # Parámetros para XGBoost 
         if model_name == 'xgboost':
             param_dist = {
                 'n_estimators': [200, 300, 400],         # Rango más conservador
@@ -388,7 +797,7 @@ class TeamPointsModel(BaseNBATeamModel):
                 'gamma': [0.1, 0.2, 0.3]                 # REGULARIZACIÓN ADICIONAL
             }
         
-        # Parámetros para LightGBM - MÁS CONSERVADORES
+        # Parámetros para LightGBM 
         elif model_name == 'lightgbm':
             param_dist = {
                 'n_estimators': [200, 300, 400],         # Rango más conservador
@@ -403,15 +812,27 @@ class TeamPointsModel(BaseNBATeamModel):
                 'feature_fraction': [0.7, 0.8, 0.9]      # REGULARIZACIÓN DE FEATURES
             }
         
+        # Parámetros para Red Neuronal
+        elif model_name == 'pytorch_neural_net':
+            param_dist = {
+                'hidden_size': [64, 96, 128],             # Arquitecturas compactas
+                'learning_rate': [0.0005, 0.001, 0.002], # Learning rates conservadores
+                'weight_decay': [0.01, 0.02, 0.03],      # Regularización L2 agresiva
+                'batch_size': [32, 64],                   # Batch sizes apropiados
+                'epochs': [120, 150, 180],                # Épocas moderadas
+                'early_stopping_patience': [10, 15, 20]  # Patience variada
+            }
+        
         else:
             return model
         
         # Búsqueda aleatoria con validación cruzada temporal MÁS ROBUSTA
         random_search = RandomizedSearchCV(
-            model, param_dist, n_iter=15,          # Reducido para evitar overfitting
+            model, param_dist, 
+            n_iter=12 if model_name == 'pytorch_neural_net' else 15,  # Menos iteraciones para NN
             cv=5,                                  # Validación cruzada robusta
             scoring='neg_mean_absolute_error', 
-            n_jobs=-1, 
+            n_jobs=-1 if model_name != 'pytorch_neural_net' else 1,  # NN en serial por GPU
             random_state=42,
             verbose=0
         )
@@ -532,10 +953,10 @@ class TeamPointsModel(BaseNBATeamModel):
         
         # Mostrar resultados
         print("\n" + "="*80)
-        print("📊 ANÁLISIS DE RENDIMIENTO - MODELO PUNTOS DE EQUIPO NBA")
+        print("ANÁLISIS DE RENDIMIENTO - MODELO PUNTOS DE EQUIPO")
         print("="*80)
         
-        print(f"\n🎯 MEJOR MODELO: {self.best_model_name.upper()}")
+        print(f"\nMEJOR MODELO: {self.best_model_name.upper()}")
         print(f"{'Métrica':<15} {'Entrenamiento':<15} {'Validación':<15} {'Diferencia':<15}")
         print("-" * 60)
         print(f"{'MAE':<15} {train_metrics['mae']:<15.3f} {val_metrics['mae']:<15.3f} {abs(train_metrics['mae'] - val_metrics['mae']):<15.3f}")
@@ -548,30 +969,30 @@ class TeamPointsModel(BaseNBATeamModel):
         cv_stability = cv_metrics.get('cv_stability', 0)
         mae_range = cv_metrics.get('mae_range', 0)
         
-        print(f"\n🔍 ANÁLISIS DE ROBUSTEZ MEJORADO:")
+        print(f"\nANÁLISIS DE ROBUSTEZ:")
         print(f"Estabilidad CV (std/mean): {cv_stability:.3f}")
         print(f"Rango MAE en CV: ±{mae_range:.3f}")
         print(f"Diferencia Entrenamiento-Validación MAE: {mae_diff:.3f}")
         
         # Clasificación de estabilidad más precisa
         if cv_stability < 0.15 and mae_range < 1.0:
-            print("✅ Modelo MUY ESTABLE - Excelente robustez")
+            print("Modelo MUY ESTABLE - Excelente robustez")
         elif cv_stability < 0.25 and mae_range < 2.0:
-            print("✅ Modelo ESTABLE - Buena robustez")
+            print("Modelo ESTABLE - Buena robustez")
         elif cv_stability < 0.35:
-            print("⚠️  Modelo MODERADAMENTE ESTABLE - Aceptable con cuidado")
+            print("Modelo MODERADAMENTE ESTABLE - Aceptable con cuidado")
         else:
-            print("❌ Modelo INESTABLE - Requiere más regularización")
+            print("Modelo INESTABLE - Requiere más regularización")
         
         # Evaluación de overfitting más detallada
         if mae_diff < 1.0 and r2_diff < 0.03:
-            print("✅ Sin overfitting - Excelente generalización")
+            print("Sin overfitting - Excelente generalización")
         elif mae_diff < 2.0 and r2_diff < 0.08:
-            print("✅ Overfitting mínimo - Buena generalización")
+            print("Overfitting mínimo - Buena generalización")
         elif mae_diff < 3.0 and r2_diff < 0.15:
-            print("⚠️  Ligero overfitting - Monitorear en producción")
+            print("Ligero overfitting - Monitorear en producción")
         else:
-            print("❌ Overfitting significativo - Aumentar regularización")
+            print("Overfitting significativo - Aumentar regularización")
         
         # Recomendaciones específicas basadas en estabilidad
         if cv_stability > 0.3:
@@ -589,13 +1010,13 @@ class TeamPointsModel(BaseNBATeamModel):
             print("- Normalizar características de entrada")
         
         # Análisis de precisión por tolerancia
-        print(f"\n🎯 PRECISIÓN POR TOLERANCIA (Validación Final):")
+        print(f"\nPRECISIÓN POR TOLERANCIA (Validación Final):")
         for tolerance in [1, 2, 3, 5, 7, 10]:
             acc = self._calculate_accuracy(y_val, pred_val, tolerance)
             print(f"±{tolerance} puntos: {acc:.1f}%")
         
         # Rendimiento de ensembles
-        print(f"\n🤖 COMPARACIÓN DE ENSEMBLES (Validación Final):")
+        print(f"\nCOMPARACIÓN DE ENSEMBLES (Validación Final):")
         print(f"{'Modelo':<20} {'MAE':<10} {'RMSE':<10} {'R²':<10}")
         print("-" * 50)
         print(f"{'Mejor Individual':<20} {val_metrics['mae']:<10.3f} {val_metrics['rmse']:<10.3f} {val_metrics['r2']:<10.4f}")
@@ -603,7 +1024,7 @@ class TeamPointsModel(BaseNBATeamModel):
         print(f"{'Stacking':<20} {stacking_metrics['mae']:<10.3f} {stacking_metrics['rmse']:<10.3f} {stacking_metrics['r2']:<10.4f}")
         
         # Validación cruzada detallada
-        print(f"\n📈 VALIDACIÓN CRUZADA (5-FOLD TEMPORAL):")
+        print(f"\nVALIDACIÓN CRUZADA (5-FOLD TEMPORAL):")
         print(f"MAE: {cv_metrics['mean_mae']:.3f} ± {cv_metrics['std_mae']:.3f}")
         print(f"R²: {cv_metrics['mean_r2']:.4f} ± {cv_metrics['std_r2']:.4f}")
         print(f"Precisión ±3pts: {cv_metrics['mean_accuracy']:.1f}% ± {cv_metrics['std_accuracy']:.1f}%")
@@ -691,7 +1112,7 @@ class TeamPointsModel(BaseNBATeamModel):
         }
         
         # Mostrar resultados
-        print(f"\n📊 TOP {top_n} CARACTERÍSTICAS MÁS IMPORTANTES:")
+        print(f"\nTOP {top_n} CARACTERÍSTICAS MÁS IMPORTANTES:")
         print(f"{'Característica':<40} {'Importancia':<15}")
         print("-" * 55)
         for _, row in top_features.iterrows():
@@ -748,3 +1169,92 @@ class TeamPointsModel(BaseNBATeamModel):
         logger.info(f"Precisión ±3pts: {metrics['accuracy_3pt']:.1f}%")
         
         return metrics
+    
+    def save_production_model(self, save_path: str = None):
+        """
+        Guarda el modelo de producción final en la carpeta trained_models.
+        
+        Args:
+            save_path: Ruta personalizada para guardar. Si None, usa ruta por defecto.
+        """
+        if not self.is_trained:
+            raise ValueError("El modelo debe ser entrenado antes de guardar")
+        
+        # Configurar ruta de guardado
+        if save_path is None:
+            # Crear carpeta trained_models si no existe
+            os.makedirs("trained_models", exist_ok=True)
+            save_path = "trained_models/teams_points.joblib"
+        
+        # Preparar objeto del modelo para producción
+        production_model = {
+            'model': self.trained_models[self.best_model_name],
+            'scaler': self.scaler,
+            'feature_columns': self.feature_columns,
+            'feature_engineer': self.feature_engineer,
+            'best_model_name': self.best_model_name,
+            'evaluation_metrics': self.evaluation_metrics,
+            'target_column': self.target_column,
+            'model_metadata': {
+                'training_date': datetime.now().isoformat(),
+                'model_type': 'NBA Team Points Predictor',
+                'version': '1.0',
+                'accuracy_3pts': self.evaluation_metrics.get('validation', {}).get('accuracy_3pt', None),
+                'mae': self.evaluation_metrics.get('validation', {}).get('mae', None),
+                'r2': self.evaluation_metrics.get('validation', {}).get('r2', None),
+                'total_features': len(self.feature_columns),
+                'best_model': self.best_model_name
+            }
+        }
+        
+        try:
+            # Guardar con joblib para compatibilidad sklearn
+            joblib.dump(production_model, save_path)
+            
+            logger.info(f"[OK] MODELO DE PRODUCCION GUARDADO EXITOSAMENTE:")
+            logger.info(f"   • Ruta: {save_path}")
+            logger.info(f"   • Mejor modelo: {self.best_model_name}")
+            logger.info(f"   • Features: {len(self.feature_columns)}")
+            logger.info(f"   • MAE: {production_model['model_metadata']['mae']:.3f}")
+            logger.info(f"   • R²: {production_model['model_metadata']['r2']:.4f}")
+            
+            # Manejar accuracy_3pts que puede ser None
+            accuracy_3pts = production_model['model_metadata']['accuracy_3pts']
+            if accuracy_3pts is not None:
+                logger.info(f"   • Precision ±3pts: {accuracy_3pts:.1f}%")
+            else:
+                logger.info(f"   • Precision ±3pts: No disponible")
+                
+            logger.info(f"   • Fecha: {production_model['model_metadata']['training_date']}")
+            
+        except Exception as e:
+            logger.error(f"Error al guardar modelo de produccion: {e}")
+            raise
+    
+    @staticmethod
+    def load_production_model(model_path: str = "trained_models/teams_points.joblib"):
+        """
+        Carga un modelo de producción guardado.
+        
+        Args:
+            model_path: Ruta del modelo guardado
+            
+        Returns:
+            Diccionario con el modelo y metadatos
+        """
+        try:
+            production_model = joblib.load(model_path)
+            
+            logger.info(f"[OK] MODELO DE PRODUCCION CARGADO:")
+            logger.info(f"   • Ruta: {model_path}")
+            logger.info(f"   • Modelo: {production_model['best_model_name']}")
+            logger.info(f"   • Features: {len(production_model['feature_columns'])}")
+            logger.info(f"   • Fecha entrenamiento: {production_model['model_metadata']['training_date']}")
+            logger.info(f"   • MAE: {production_model['model_metadata']['mae']:.3f}")
+            logger.info(f"   • R²: {production_model['model_metadata']['r2']:.4f}")
+            
+            return production_model
+            
+        except Exception as e:
+            logger.error(f"Error al cargar modelo de produccion: {e}")
+            raise

@@ -44,6 +44,51 @@ class TeamPointsFeatureEngineer:
         """
         logger.info("Generando features NBA específicas OPTIMIZADAS para puntos de equipo...")
         
+        # DIAGNÓSTICO DE COLUMNAS DISPONIBLES
+        logger.info(f"DataFrame recibido: {len(df)} filas, {len(df.columns)} columnas")
+        logger.info(f"Columnas disponibles: {list(df.columns)}")
+        
+        # VERIFICACIÓN ESPECÍFICA DE is_win
+        if 'is_win' in df.columns:
+            logger.info(f"OK - is_win encontrada! Valores únicos: {df['is_win'].unique()}")
+            logger.info(f"   Valores no nulos: {df['is_win'].notna().sum()}/{len(df)}")
+        else:
+            logger.warning("ERROR - is_win NO encontrada en DataFrame")
+            # Buscar columnas similares
+            similar_cols = [col for col in df.columns if 'win' in col.lower() or 'result' in col.lower()]
+            logger.info(f"   Columnas relacionadas encontradas: {similar_cols}")
+            
+            # CREAR is_win desde Result si está disponible
+            if 'Result' in df.columns:
+                logger.info("Creando is_win desde columna Result...")
+                
+                def extract_win_from_result(result_str):
+                    """Extrae is_win desde el formato 'W 123-100' o 'L 114-116'"""
+                    try:
+                        result_str = str(result_str).strip()
+                        if result_str.startswith('W'):
+                            return 1
+                        elif result_str.startswith('L'):
+                            return 0
+                        else:
+                            return None  # Valor inválido
+                    except:
+                        return None
+                
+                df['is_win'] = df['Result'].apply(extract_win_from_result)
+                
+                # Verificar creación exitosa
+                valid_wins = df['is_win'].notna().sum()
+                total_rows = len(df)
+                logger.info(f"OK - is_win creada exitosamente: {valid_wins}/{total_rows} valores válidos")
+                logger.info(f"   Valores únicos: {df['is_win'].unique()}")
+                
+                if valid_wins < total_rows:
+                    invalid_results = df[df['is_win'].isna()]['Result'].unique()
+                    logger.warning(f"   Formatos no reconocidos: {invalid_results}")
+            else:
+                logger.error("No se puede crear is_win: columna Result no disponible")
+        
         # Trabajar directamente con el DataFrame (NO crear copia)
         if df.empty:
             return []
@@ -83,10 +128,12 @@ class TeamPointsFeatureEngineer:
             'FG', 'FGA', 'FG%', '2P', '2PA', '2P%', '3P', '3PA', '3P%', 
             'FT', 'FTA', 'FT%', 'FG_Opp', 'FGA_Opp', 'FG%_Opp', 
             '2P_Opp', '2PA_Opp', '2P%_Opp', '3P_Opp', '3PA_Opp', '3P%_Opp',
-            'FT_Opp', 'FTA_Opp', 'FT%_Opp', 'is_win',  # Excluir is_win directo
+            'FT_Opp', 'FTA_Opp', 'FT%_Opp',
             # Excluir variables categóricas y auxiliares
             'team_scoring_tier', 'team_tier_adjusted_projection'
         ]]
+        # Nota: is_win se excluye solo si viene de datos externos, pero si la creamos internamente 
+        # para features de momentum, se mantiene como feature válida
             
         logger.info(f"Generadas {len(all_features)} características ESPECÍFICAS para puntos de equipo")
         return all_features
@@ -328,8 +375,13 @@ class TeamPointsFeatureEngineer:
             )
         
         # ==================== FEATURES DE MOMENTUM OPTIMIZADAS ====================
-        # Usar la columna 'is_win' proporcionada por el dataloader pero con datos históricos
+        # Verificar disponibilidad de is_win del data loader
         if 'is_win' in df.columns:
+            logger.info("Columna 'is_win' detectada del data loader")
+            logger.info("OK - 4 features básicas de momentum creadas exitosamente:")
+            logger.info("   - team_win_pct_5g, team_win_pct_10g")
+            logger.info("   - team_recent_wins, team_win_streak")
+            
             # Win percentage histórico (usando datos desplazados para evitar data leakage)
             df['team_win_pct_5g'] = df.groupby('Team')['is_win'].transform(
                 lambda x: x.shift(1).rolling(window=5, min_periods=1).mean()
@@ -351,29 +403,58 @@ class TeamPointsFeatureEngineer:
                 )
             ).fillna(2.5)
             
+        else:
+            logger.error("CRÍTICO: Columna 'is_win' NO encontrada en DataFrame")
+            logger.error(f"   Columnas disponibles: {list(df.columns)}")
+            logger.error("   Las features de momentum NO se pueden crear sin is_win")
+        
+        # ==================== FEATURES DE CONFIANZA Y MOMENTUM DERIVADAS ====================
         # Factor de confianza del equipo basado en win percentage histórico
         if 'team_win_pct_5g' in df.columns:
+            logger.info("Creando team_confidence_factor basado en win percentage...")
             # Usar win percentage histórico como proxy de "confianza"
             df['team_confidence_factor'] = (df['team_win_pct_5g'] - 0.5) * 4  # Escalado apropiado
         elif 'team_conversion_efficiency_avg_5g' in df.columns:
+            logger.info("Creando team_confidence_factor basado en eficiencia (fallback)...")
             # Fallback: usar eficiencia histórica como proxy de "confianza"
             efficiency_avg = df['team_conversion_efficiency_avg_5g'].fillna(0.45)
             df['team_confidence_factor'] = (efficiency_avg - 0.45) * 4
         else:
+            logger.warning("team_confidence_factor = 0 (sin datos históricos)")
             df['team_confidence_factor'] = 0
-            
+        
         # Momentum de confianza basado en cambios de win percentage (NO en victorias actuales)
         if 'team_win_pct_5g' in df.columns:
+            logger.info("Creando team_confidence_momentum basado en cambios de win percentage...")
             df['team_confidence_momentum'] = df.groupby('Team')['team_win_pct_5g'].transform(
                 lambda x: x.diff().shift(1)
             ).fillna(0)
         elif 'team_conversion_efficiency_avg_5g' in df.columns:
+            logger.info("Creando team_confidence_momentum basado en cambios de eficiencia (fallback)...")
             # Fallback: usar cambios de eficiencia
             df['team_confidence_momentum'] = df.groupby('Team')['team_conversion_efficiency_avg_5g'].transform(
                 lambda x: x.diff().shift(1)
             ).fillna(0)
         else:
+            logger.warning("team_confidence_momentum = 0 (sin datos históricos)")
             df['team_confidence_momentum'] = 0
+        
+        # ==================== REPORTE FINAL DE MOMENTUM FEATURES ====================
+        momentum_features_created = []
+        momentum_features_expected = ['team_win_pct_5g', 'team_win_pct_10g', 'team_recent_wins', 
+                                    'team_win_streak', 'team_confidence_factor', 'team_confidence_momentum']
+        
+        for feature in momentum_features_expected:
+            if feature in df.columns:
+                momentum_features_created.append(feature)
+        
+        coverage = len(momentum_features_created) / len(momentum_features_expected) * 100
+        logger.info(f"MOMENTUM FEATURES - Cobertura: {coverage:.1f}% ({len(momentum_features_created)}/{len(momentum_features_expected)})")
+        logger.info(f"Creadas: {momentum_features_created}")
+        
+        if len(momentum_features_created) < len(momentum_features_expected):
+            missing_features = [f for f in momentum_features_expected if f not in momentum_features_created]
+            logger.warning(f"Faltantes: {missing_features}")
     
     def _create_context_features(self, df: pd.DataFrame) -> None:
         """Features de contexto situacional - ADAPTADO DE TOTAL_POINTS"""
@@ -544,7 +625,7 @@ class TeamPointsFeatureEngineer:
                        'FG', 'FGA', 'FG%', '2P', '2PA', '2P%', '3P', '3PA', '3P%', 
                        'FT', 'FTA', 'FT%', 'FG_Opp', 'FGA_Opp', 'FG%_Opp', 
                        '2P_Opp', '2PA_Opp', '2P%_Opp', '3P_Opp', '3PA_Opp', '3P%_Opp',
-                       'FT_Opp', 'FTA_Opp', 'FT%_Opp', 'is_win']  # Excluir is_win directo
+                       'FT_Opp', 'FTA_Opp', 'FT%_Opp']  # is_win puede ser feature válida si se creó internamente
         
         self.feature_columns = [col for col in df.columns if col not in exclude_cols]
     

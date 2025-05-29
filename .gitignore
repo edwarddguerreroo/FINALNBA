@@ -8,4 +8,6 @@ analysis_output
 trained_models
 .cursor
 catboost_info
+scripts/
+plots/
 
