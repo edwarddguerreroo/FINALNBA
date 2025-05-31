@@ -23,6 +23,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import joblib
 import numpy as np
 import pandas as pd
+import json
 
 # Scikit-learn
 from sklearn.base import BaseEstimator, ClassifierMixin
@@ -67,9 +68,130 @@ from .features_is_win import IsWinFeatureEngineer
 # Configuration
 warnings.filterwarnings('ignore')
 
-# Logging setup
+# Logging setup optimizado
 import logging
-logger = logging.getLogger(__name__)
+import sys
+from pathlib import Path
+
+class OptimizedLogger:
+    """Sistema de logging optimizado para modelos NBA"""
+    
+    _loggers = {}
+    _handlers_configured = False
+    
+    @classmethod
+    def get_logger(cls, name: str = __name__, level: str = "INFO") -> logging.Logger:
+        """Obtener logger optimizado con configuración centralizada"""
+        
+        if name in cls._loggers:
+            return cls._loggers[name]
+        
+        # Crear logger
+        logger = logging.getLogger(name)
+        logger.setLevel(getattr(logging, level.upper()))
+        
+        # Configurar handlers solo una vez
+        if not cls._handlers_configured:
+            cls._setup_handlers(logger)
+            cls._handlers_configured = True
+        
+        # Evitar propagación duplicada
+        logger.propagate = False
+        
+        cls._loggers[name] = logger
+        return logger
+    
+    @classmethod
+    def _setup_handlers(cls, logger: logging.Logger):
+        """Configurar handlers de logging optimizados"""
+        
+        # Formatter más simple
+        formatter = logging.Formatter(
+            fmt='%(asctime)s | %(levelname)s | %(message)s',
+            datefmt='%H:%M:%S'
+        )
+        
+        # Handler para consola con filtro de nivel
+        console_handler = logging.StreamHandler(sys.stdout)
+        console_handler.setLevel(logging.INFO)
+        console_handler.setFormatter(formatter)
+        
+        # Handler para archivo solo para errores importantes
+        log_dir = Path("logs")
+        log_dir.mkdir(exist_ok=True)
+        
+        file_handler = logging.FileHandler(
+            log_dir / f"nba_model_{datetime.now().strftime('%Y%m%d')}.log",
+            mode='a',
+            encoding='utf-8'
+        )
+        file_handler.setLevel(logging.WARNING)  # Solo warnings y errores
+        file_handler.setFormatter(formatter)
+        
+        # Agregar handlers al logger raíz
+        root_logger = logging.getLogger()
+        root_logger.handlers.clear()
+        root_logger.addHandler(console_handler)
+        root_logger.addHandler(file_handler)
+        root_logger.setLevel(logging.INFO)
+    
+    @classmethod
+    def log_performance_metrics(cls, logger: logging.Logger, 
+                               metrics: Dict[str, float], 
+                               model_name: str = "Model",
+                               phase: str = "Training"):
+        """Log conciso para métricas de rendimiento"""
+        
+        # Solo mostrar métricas principales
+        acc = metrics.get('accuracy', 0)
+        auc = metrics.get('auc_roc', 0)
+        
+        logger.info(f"{model_name}: ACC={acc:.3f}, AUC={auc:.3f}")
+    
+    @classmethod
+    def log_training_progress(cls, logger: logging.Logger,
+                             epoch: int, total_epochs: int,
+                             train_loss: float, val_loss: float,
+                             val_accuracy: float,
+                             model_name: str = "Neural Network"):
+        """Log reducido para progreso de entrenamiento"""
+        
+        # Solo cada 50 epochs para reducir verbosidad
+        if epoch % 50 == 0 or epoch == total_epochs - 1:
+            logger.info(f"Epoch {epoch}/{total_epochs}: Loss={val_loss:.3f}, Acc={val_accuracy:.3f}")
+    
+    @classmethod
+    def log_gpu_info(cls, logger: logging.Logger, 
+                     device_info: Dict[str, Any],
+                     phase: str = "Setup"):
+        """Log simplificado para información de GPU"""
+        
+        device = device_info.get('device', 'Unknown')
+        
+        if device_info.get('type') == 'cuda':
+            memory_info = device_info.get('memory_info', {})
+            free_gb = memory_info.get('free_gb', 0)
+            logger.info(f"GPU: {device} ({free_gb:.1f}GB libre)")
+        else:
+            logger.info(f"CPU: {device}")
+    
+    @classmethod
+    def log_model_summary(cls, logger: logging.Logger,
+                         model_results: Dict[str, Any]):
+        """Log resumido para resumen de modelos"""
+        
+        logger.info("Resumen de modelos:")
+        
+        for model_name, results in model_results.items():
+            if isinstance(results, dict) and 'val_metrics' in results:
+                metrics = results['val_metrics']
+                acc = metrics.get('accuracy', 0)
+                auc = metrics.get('auc_roc', 0)
+                
+                logger.info(f"  {model_name}: ACC={acc:.3f}, AUC={auc:.3f}")
+
+# Configurar logger global optimizado
+logger = OptimizedLogger.get_logger(__name__)
 
 
 class DataProcessor:
@@ -189,8 +311,6 @@ class ModelTrainer:
         max_estimators = 200
         step_size = 25
         
-        logger.info(f"  Implementando early stopping manual para {model_name}")
-        
         for n_est in range(min_estimators, max_estimators + 1, step_size):
             model.n_estimators = n_est
             model.fit(X_train, y_train)
@@ -206,8 +326,6 @@ class ModelTrainer:
                 patience_counter += 1
             
             if patience_counter >= patience:
-                logger.info(f"  Early stopping: mejor n_estimators = "
-                           f"{best_n_estimators}")
                 model.n_estimators = best_n_estimators
                 model.fit(X_train, y_train)
                 break
@@ -394,10 +512,6 @@ class PyTorchNBAClassifier(ClassifierMixin, BaseEstimator):
     def _setup_device_with_gpu_manager(self):
         """Configuración avanzada del dispositivo usando GPUManager"""
         
-        # Mostrar resumen de dispositivos disponibles
-        if logger.isEnabledFor(logging.INFO):
-            GPUManager.print_gpu_summary()
-        
         # Configurar dispositivo óptimo
         self.device = GPUManager.setup_device(
             device_preference=self.device_preference,
@@ -412,16 +526,26 @@ class PyTorchNBAClassifier(ClassifierMixin, BaseEstimator):
             self.device, "initial"
         )
         
-        logger.info(f"Dispositivo configurado: {self.device}")
+        # Log usando sistema optimizado
+        device_info = GPUManager.get_device_info(str(self.device))
+        OptimizedLogger.log_gpu_info(
+            OptimizedLogger.get_logger(f"{__name__}.PyTorchNBAClassifier"),
+            device_info,
+            "Configuración"
+        )
     
     def _auto_adjust_batch_size(self, X_train_tensor: torch.Tensor, 
                                y_train_tensor: torch.Tensor) -> int:
-        """Ajustar automáticamente el batch_size basado en memoria disponible"""
+        """Detectar automáticamente el batch_size óptimo para la GPU"""
         
-        if not self.auto_batch_size or self.device.type == 'cpu':
-            return self.batch_size
+        nn_logger = OptimizedLogger.get_logger(f"{__name__}.PyTorchNBAClassifier")
         
-        logger.info("Detectando batch_size óptimo para GPU...")
+        if self.device.type == 'cpu':
+            optimal_size = min(self.batch_size, 64)
+            nn_logger.debug(f"💻 CPU detectada | Batch size: {optimal_size}")
+            return optimal_size
+        
+        nn_logger.debug("🔍 Detectando batch_size óptimo para GPU...")
         
         # Crear modelo temporal para prueba
         temp_model = NBAWinPredictionNet(
@@ -458,23 +582,25 @@ class PyTorchNBAClassifier(ClassifierMixin, BaseEstimator):
                 
             except RuntimeError as e:
                 if "out of memory" in str(e).lower():
-                    logger.info(f"OOM con batch_size {test_batch_size}, "
-                               f"usando {optimal_batch_size}")
+                    # OOM detectado, usar el batch size anterior
+                    nn_logger.debug(f"🚫 OOM en batch_size {test_batch_size}")
                     break
                 else:
                     # Otro tipo de error
-                    logger.warning(f"Error probando batch_size {test_batch_size}: {e}")
+                    nn_logger.warning(f"⚠️  Error probando batch_size {test_batch_size}: {e}")
                     break
         
         # Limpiar modelo temporal
         del temp_model
         torch.cuda.empty_cache()
         
-        logger.info(f"Batch size óptimo detectado: {optimal_batch_size}")
+        nn_logger.info(f"🎯 Batch size óptimo detectado: {optimal_batch_size}")
         return optimal_batch_size
     
     def fit(self, X, y):
         """Entrenamiento del modelo con early stopping, validación y manejo avanzado de GPU"""
+        
+        nn_logger = OptimizedLogger.get_logger(f"{__name__}.PyTorchNBAClassifier")
         
         # Monitorear memoria antes del entrenamiento
         self.gpu_memory_stats['pre_training'] = GPUManager.monitor_memory_usage(
@@ -482,6 +608,8 @@ class PyTorchNBAClassifier(ClassifierMixin, BaseEstimator):
         )
         
         try:
+            nn_logger.info("🚀 Iniciando entrenamiento de red neuronal...")
+            
             # Preparar datos
             X_scaled = self.scaler.fit_transform(X)
             
@@ -495,6 +623,8 @@ class PyTorchNBAClassifier(ClassifierMixin, BaseEstimator):
             X_train, X_val, y_train, y_val = train_test_split(
                 X_scaled, y, test_size=val_split, stratify=y, random_state=42
             )
+            
+            nn_logger.info(f"📊 Datos preparados | Train: {len(X_train)} | Val: {len(X_val)}")
             
             # Convertir a tensores
             X_train_tensor = torch.FloatTensor(X_train).to(self.device)
@@ -535,6 +665,9 @@ class PyTorchNBAClassifier(ClassifierMixin, BaseEstimator):
                 dropout_rate=self.dropout_rate
             ).to(self.device)
             
+            nn_logger.info(f"🧠 Red neuronal inicializada | Input: {X_train.shape[1]} | "
+                          f"Hidden: {self.hidden_size} | Dropout: {self.dropout_rate}")
+            
             # Configurar optimizador y loss
             optimizer = optim.AdamW(
                 self.model.parameters(),
@@ -562,6 +695,9 @@ class PyTorchNBAClassifier(ClassifierMixin, BaseEstimator):
             self.gpu_memory_stats['post_init'] = GPUManager.monitor_memory_usage(
                 self.device, "post_init"
             )
+            
+            nn_logger.info(f"🔄 Iniciando entrenamiento | Epochs: {self.epochs} | "
+                          f"Batch size: {optimal_batch_size} | LR: {self.learning_rate}")
             
             for epoch in range(self.epochs):
                 # Entrenamiento
@@ -610,44 +746,51 @@ class PyTorchNBAClassifier(ClassifierMixin, BaseEstimator):
                 # Ajustar learning rate
                 scheduler.step(val_loss)
                 
-                # Log progreso
-                if epoch % 20 == 0:
-                    logger.info(
-                        f"Epoch {epoch}: Train Loss: {avg_train_loss:.4f}, "
-                        f"Val Loss: {val_loss:.4f}, Val Acc: {val_accuracy:.4f}"
+                # Log progreso usando sistema optimizado cada 25 epochs
+                if epoch % 25 == 0 or epoch == self.epochs - 1:
+                    OptimizedLogger.log_training_progress(
+                        nn_logger, epoch, self.epochs,
+                        avg_train_loss, val_loss, val_accuracy,
+                        "Red Neuronal"
                     )
                 
                 # Verificar early stopping
                 if self.patience_counter >= self.early_stopping_patience:
-                    logger.info(f"Early stopping en epoch {epoch}")
+                    nn_logger.info(f"⏹️  Early stopping activado en epoch {epoch}")
                     break
             
-            # Restaurar mejor modelo
-            if self.best_model_state:
+            # Cargar mejor modelo
+            if self.best_model_state is not None:
                 self.model.load_state_dict(self.best_model_state)
+                nn_logger.info("✅ Mejor modelo cargado")
             
             # Monitorear memoria final
             self.gpu_memory_stats['post_training'] = GPUManager.monitor_memory_usage(
                 self.device, "post_training"
             )
             
-            logger.info(
-                f"Entrenamiento completado. Mejor val loss: {self.best_val_loss:.4f}"
+            # Log resumen final
+            final_metrics = {
+                'final_val_loss': self.best_val_loss,
+                'final_val_accuracy': max(self.training_history['val_accuracy']),
+                'epochs_trained': len(self.training_history['train_loss'])
+            }
+            
+            OptimizedLogger.log_performance_metrics(
+                nn_logger, final_metrics, "Red Neuronal", "Final"
             )
+            
+            return self
             
         except RuntimeError as e:
             if "out of memory" in str(e).lower():
-                # Manejar error OOM
+                # Manejar error de memoria insuficiente
                 oom_info = GPUManager.handle_oom_error(self.device)
-                logger.error(f"Error de memoria insuficiente: {e}")
-                logger.error(f"Sugerencias: {oom_info['suggested_actions']}")
-                raise RuntimeError(
-                    f"Error OOM en GPU. Sugerencias: {oom_info['suggested_actions']}"
-                ) from e
+                nn_logger.error(f"❌ Error de memoria insuficiente: {e}")
+                raise RuntimeError(f"GPU sin memoria suficiente. {oom_info['suggested_actions']}")
             else:
+                nn_logger.error(f"❌ Error durante entrenamiento: {e}")
                 raise e
-        
-        return self
     
     def predict_proba(self, X):
         """Predicción de probabilidades con optimización de memoria"""
@@ -814,72 +957,63 @@ class GPUManager:
     
     @staticmethod
     def get_optimal_device(min_memory_gb: float = 2.0) -> str:
-        """Obtener el dispositivo óptimo con suficiente memoria"""
+        """Seleccionar el dispositivo óptimo basado en memoria disponible"""
         
-        if not torch.cuda.is_available():
-            logger.info("CUDA no disponible, usando CPU")
-            return 'cpu'
+        devices = GPUManager.get_available_devices()
+        best_device = "cpu"
+        best_memory = 0
         
-        # Buscar GPU con más memoria libre
-        best_device = 'cpu'
-        max_free_memory = 0
-        
-        for i in range(torch.cuda.device_count()):
-            device_str = f'cuda:{i}'
-            device_info = GPUManager.get_device_info(device_str)
-            
-            if device_info['available'] and device_info['memory_info']:
-                free_memory = device_info['memory_info']['free_gb']
+        for device_str in devices:
+            if device_str == "cpu":
+                continue
                 
-                if free_memory >= min_memory_gb and free_memory > max_free_memory:
-                    max_free_memory = free_memory
+            info = GPUManager.get_device_info(device_str)
+            if (info['available'] and 
+                GPUManager.check_memory_availability(device_str, min_memory_gb)):
+                
+                memory_gb = info.get('memory', {}).get('free_gb', 0)
+                if memory_gb > best_memory:
+                    best_memory = memory_gb
                     best_device = device_str
         
-        logger.info(f"Dispositivo óptimo seleccionado: {best_device}")
-        if best_device != 'cpu':
-            info = GPUManager.get_device_info(best_device)
-            logger.info(f"GPU: {info.get('device_name', 'Unknown')}, "
-                       f"Memoria libre: {max_free_memory:.1f}GB")
+        if best_device == "cpu":
+            logger.info("CUDA no disponible, usando CPU")
         
         return best_device
     
     @staticmethod
     def setup_device(device_preference: str = None, 
                    min_memory_gb: float = 2.0) -> torch.device:
-        """Configurar dispositivo con verificaciones de seguridad"""
+        """Configurar dispositivo con validación de memoria"""
         
         if device_preference:
-            # Verificar dispositivo específico solicitado
-            if device_preference in GPUManager.get_available_devices():
-                if GPUManager.check_memory_availability(device_preference, min_memory_gb):
-                    logger.info(f"Usando dispositivo solicitado: {device_preference}")
-                    return torch.device(device_preference)
-                else:
-                    logger.warning(f"Dispositivo {device_preference} no tiene suficiente memoria "
-                                 f"({min_memory_gb}GB requeridos). Buscando alternativa...")
+            # Verificar dispositivo solicitado
+            if GPUManager.check_memory_availability(device_preference, min_memory_gb):
+                return torch.device(device_preference)
             else:
-                logger.warning(f"Dispositivo {device_preference} no disponible. "
-                             f"Buscando alternativa...")
+                logger.warning(f"Dispositivo {device_preference} no disponible o sin memoria suficiente. "
+                             f"Seleccionando automáticamente...")
         
-        # Buscar dispositivo óptimo automáticamente
+        # Seleccionar dispositivo óptimo
         optimal_device = GPUManager.get_optimal_device(min_memory_gb)
-        return torch.device(optimal_device)
+        device = torch.device(optimal_device)
+        
+        # Optimizar memoria si es GPU
+        if device.type == 'cuda':
+            GPUManager.optimize_memory_usage(device)
+        
+        return device
     
     @staticmethod
     def optimize_memory_usage(device: torch.device):
-        """Optimizar uso de memoria del dispositivo"""
-        
+        """Optimizar uso de memoria GPU"""
         if device.type == 'cuda':
             try:
-                # Limpiar caché de memoria
                 torch.cuda.empty_cache()
-                
-                # Configurar optimizaciones de memoria
-                torch.backends.cudnn.benchmark = True  # Optimizar para tamaños fijos
-                torch.backends.cudnn.deterministic = False  # Permitir no-determinismo para velocidad
-                
-                logger.info("Optimizaciones de memoria GPU aplicadas")
-                
+                torch.cuda.synchronize()
+                # Configuraciones adicionales de optimización
+                torch.backends.cudnn.benchmark = True
+                torch.backends.cudnn.deterministic = False
             except Exception as e:
                 logger.warning(f"Error optimizando memoria GPU: {e}")
     
@@ -914,34 +1048,36 @@ class GPUManager:
     @staticmethod
     def handle_oom_error(device: torch.device, 
                         reduce_batch_size: bool = True) -> Dict[str, Any]:
-        """Manejar errores de memoria insuficiente (OOM)"""
+        """Manejar errores de memoria insuficiente"""
         
         recovery_info = {
-            'oom_occurred': True,
-            'recovery_attempted': False,
-            'suggested_actions': []
+            'memory_cleared': False,
+            'suggested_actions': [],
+            'current_memory': {}
         }
         
         if device.type == 'cuda':
             try:
-                # Limpiar memoria
+                # Limpiar memoria GPU
                 torch.cuda.empty_cache()
+                torch.cuda.synchronize()
+                
+                recovery_info['memory_cleared'] = True
+                recovery_info['current_memory'] = GPUManager.monitor_memory_usage(
+                    device, "post_oom_cleanup"
+                )
                 
                 # Sugerencias de recuperación
                 recovery_info['suggested_actions'] = [
-                    'Reducir batch_size',
-                    'Usar gradient_checkpointing',
-                    'Reducir dimensiones del modelo',
-                    'Usar mixed precision training',
-                    'Cambiar a CPU'
+                    "Reducir batch_size",
+                    "Reducir hidden_size del modelo",
+                    "Usar gradient checkpointing",
+                    "Cambiar a CPU si persiste el problema"
                 ]
-                
-                recovery_info['recovery_attempted'] = True
-                logger.warning("Error OOM detectado. Memoria GPU limpiada. "
-                             "Considera reducir batch_size o usar CPU.")
                 
             except Exception as e:
                 logger.error(f"Error en recuperación OOM: {e}")
+                recovery_info['suggested_actions'] = ["Reiniciar proceso y usar CPU"]
         
         return recovery_info
     
@@ -993,7 +1129,10 @@ def configure_gpu_environment(device_preference: str = None,
         Diccionario con información de configuración
     """
     
+    gpu_logger = OptimizedLogger.get_logger(f"{__name__}.GPUConfig")
+    
     if print_summary:
+        gpu_logger.info("🖥️  Configurando entorno GPU para modelos NBA...")
         GPUManager.print_gpu_summary()
     
     # Configurar dispositivo óptimo
@@ -1014,7 +1153,12 @@ def configure_gpu_environment(device_preference: str = None,
         'gpu_count': torch.cuda.device_count() if torch.cuda.is_available() else 0
     }
     
-    logger.info(f"Entorno GPU configurado: {optimal_device}")
+    # Log información de configuración usando sistema optimizado
+    OptimizedLogger.log_gpu_info(gpu_logger, device_info, "Final")
+    
+    gpu_logger.info(f"✅ Entorno GPU configurado | PyTorch: {torch.__version__} | "
+                   f"CUDA: {config_info['cuda_available']} | GPUs: {config_info['gpu_count']}")
+    
     return config_info
 
 
@@ -1023,7 +1167,7 @@ class IsWinModel:
     
     def __init__(self, optimize_hyperparams: bool = True,
                  device: Optional[str] = None,
-                 bayesian_n_calls: int = 25,
+                 bayesian_n_calls: int = 50,
                  min_memory_gb: float = 2.0):
         
         self.optimize_hyperparams = optimize_hyperparams
@@ -1056,166 +1200,198 @@ class IsWinModel:
         self.gpu_config = configure_gpu_environment(
             device_preference=self.device_preference,
             min_memory_gb=self.min_memory_gb,
-            print_summary=True
+            print_summary=False
         )
         
         # Usar dispositivo configurado
         self.device = self.gpu_config['selected_device']
+        
+        # Log simplificado de GPU
+        OptimizedLogger.log_gpu_info(
+            logger, 
+            self.gpu_config.get('device_info', {}),
+            "Configuración"
+        )
     
     def _setup_models(self):
-        """
-        Configurar modelos individuales con REGULARIZACIÓN AGRESIVA
-        Prevenir sobreajuste con parámetros conservadores
-        """
-        logger.info("Configurando modelos con regularización agresiva...")
+        """Configurar modelos individuales con REGULARIZACIÓN EXTREMA ANTI-OVERFITTING"""
         
-        # XGBoost con regularización fuerte
+        # XGBoost con regularización ULTRA AGRESIVA
         self.models['xgboost'] = xgb.XGBClassifier(
-            n_estimators=100,          # Reducido para evitar sobreajuste
-            max_depth=4,               # Profundidad limitada
-            learning_rate=0.05,        # Learning rate bajo
-            subsample=0.8,             # Submuestreo agresivo
-            colsample_bytree=0.8,      # Feature sampling
-            reg_alpha=1.0,             # L1 regularization
-            reg_lambda=2.0,            # L2 regularization fuerte
-            min_child_weight=5,        # Peso mínimo por hoja
-            gamma=1.0,                 # Minimum split loss
-            random_state=42,
-            n_jobs=-1,
+            n_estimators=50,        # Reducido drásticamente de 100
+            max_depth=3,            # Reducido de 4 para árboles más simples
+            learning_rate=0.02,     # Reducido de 0.05 para aprendizaje más lento
+            subsample=0.6,          # Reducido de 0.8 para más regularización
+            colsample_bytree=0.6,   # Reducido de 0.8
+            reg_alpha=3.0,          # Aumentado de 1.0 (regularización L1)
+            reg_lambda=5.0,         # Aumentado de 2.0 (regularización L2)
+            min_child_weight=10,    # Aumentado de 5
+            gamma=2.0,              # Aumentado de 1.0
+            max_delta_step=1,       # Nuevo: limitar cambios extremos
+            random_state=42, 
+            n_jobs=-1, 
             eval_metric='logloss'
-            # Sin early_stopping_rounds para compatibilidad con CV
         )
         
-        # LightGBM con regularización fuerte
+        # LightGBM con regularización ULTRA AGRESIVA
         self.models['lightgbm'] = lgb.LGBMClassifier(
-            n_estimators=100,          # Reducido
-            max_depth=4,               # Profundidad limitada
-            learning_rate=0.05,        # Learning rate bajo
-            subsample=0.8,             # Submuestreo
-            colsample_bytree=0.8,      # Feature sampling
-            reg_alpha=1.0,             # L1 regularization
-            reg_lambda=2.0,            # L2 regularization fuerte
-            min_child_samples=20,      # Muestras mínimas por hoja
-            min_split_gain=0.1,        # Ganancia mínima para split
-            random_state=42,
-            n_jobs=-1,
+            n_estimators=50,        # Reducido drásticamente de 100
+            max_depth=3,            # Reducido de 4
+            learning_rate=0.02,     # Reducido de 0.05
+            subsample=0.6,          # Reducido de 0.8
+            colsample_bytree=0.6,   # Reducido de 0.8
+            reg_alpha=3.0,          # Aumentado de 1.0
+            reg_lambda=5.0,         # Aumentado de 2.0
+            min_child_samples=50,   # Aumentado drásticamente de 20
+            min_split_gain=0.5,     # Aumentado de 0.1
+            num_leaves=15,          # Nuevo: limitar complejidad del árbol
+            feature_fraction=0.6,   # Nuevo: usar solo 60% de features
+            bagging_fraction=0.6,   # Nuevo: usar solo 60% de datos
+            bagging_freq=5,         # Nuevo: bagging cada 5 iteraciones
+            random_state=42, 
+            n_jobs=-1, 
             verbosity=-1
-            # Sin early_stopping_rounds para compatibilidad con CV
         )
         
-        # Random Forest con regularización
+        # Random Forest con regularización EXTREMA
         self.models['random_forest'] = RandomForestClassifier(
-            n_estimators=100,          # Reducido
-            max_depth=6,               # Profundidad limitada
-            min_samples_split=20,      # Samples mínimas para split
-            min_samples_leaf=10,       # Samples mínimas por hoja
-            max_features='sqrt',       # Feature sampling automático
-            bootstrap=True,
-            oob_score=True,            # Out-of-bag validation
-            random_state=42,
+            n_estimators=50,        # Reducido drásticamente de 100
+            max_depth=4,            # Reducido de 6
+            min_samples_split=50,   # Aumentado drásticamente de 20
+            min_samples_leaf=25,    # Aumentado drásticamente de 10
+            max_features=0.4,       # Reducido de 'sqrt' para usar menos features
+            bootstrap=True,         # Asegurar que bootstrap esté habilitado
+            oob_score=True, 
+            random_state=42, 
             n_jobs=-1
         )
         
-        # Extra Trees con más regularización
+        # Extra Trees con regularización EXTREMA
         self.models['extra_trees'] = ExtraTreesClassifier(
-            n_estimators=100,          # Reducido
-            max_depth=6,               # Profundidad limitada
-            min_samples_split=25,      # Más estricto
-            min_samples_leaf=15,       # Más estricto
-            max_features='sqrt',       # Feature sampling
-            bootstrap=True,
-            oob_score=True,
-            random_state=42,
+            n_estimators=50,        # Reducido drásticamente de 100
+            max_depth=4,            # Reducido de 6
+            min_samples_split=60,   # Aumentado drásticamente de 25
+            min_samples_leaf=30,    # Aumentado drásticamente de 15
+            max_features=0.3,       # Reducido drásticamente para usar menos features
+            bootstrap=True,         # Asegurar que bootstrap esté habilitado
+            oob_score=True, 
+            random_state=42, 
             n_jobs=-1
         )
         
-        # Gradient Boosting con regularización fuerte
+        # Gradient Boosting con regularización EXTREMA
         self.models['gradient_boosting'] = GradientBoostingClassifier(
-            n_estimators=100,          # Reducido
-            max_depth=4,               # Profundidad limitada
-            learning_rate=0.05,        # Learning rate bajo
-            subsample=0.8,             # Submuestreo
-            min_samples_split=20,      # Samples mínimas para split
-            min_samples_leaf=10,       # Samples mínimas por hoja
-            max_features='sqrt',       # Feature sampling
+            n_estimators=50,        # Reducido drásticamente de 100
+            max_depth=3,            # Reducido de 4
+            learning_rate=0.02,     # Reducido drásticamente de 0.05
+            subsample=0.5,          # Reducido drásticamente de 0.8
+            min_samples_split=50,   # Aumentado drásticamente de 20
+            min_samples_leaf=25,    # Aumentado drásticamente de 10
+            max_features=0.3,       # Reducido drásticamente de 'sqrt'
+            validation_fraction=0.2, # Nuevo: usar 20% para validación interna
+            n_iter_no_change=5,     # Nuevo: early stopping agresivo
+            tol=1e-3,               # Nuevo: tolerancia para early stopping
             random_state=42
         )
         
-        # Red Neuronal con Dropout agresivo
+        # Red Neuronal con DROPOUT EXTREMO y arquitectura mínima
         self.models['neural_network'] = PyTorchNBAClassifier(
-            hidden_size=64,            # Reducido de 128
-            epochs=150,                # Reducido de 200
-            batch_size=64,             # Más grande para estabilidad
-            learning_rate=0.001,
-            weight_decay=0.01,         # L2 regularization
-            early_stopping_patience=15,
-            dropout_rate=0.5,          # Dropout agresivo (50%)
-            device=self.device,
-            min_memory_gb=self.min_memory_gb,
+            hidden_size=32,         # Reducido drásticamente de 64
+            epochs=50,              # Reducido drásticamente de 100
+            batch_size=128,         # Aumentado para más estabilidad
+            learning_rate=0.0005,   # Reducido de 0.001
+            weight_decay=0.05,      # Aumentado drásticamente de 0.01
+            early_stopping_patience=8,  # Reducido de 15
+            dropout_rate=0.7,       # Aumentado drásticamente de 0.5
+            device=self.device, 
+            min_memory_gb=self.min_memory_gb, 
             auto_batch_size=True
         )
         
-        # Configurar stacking con LogisticRegression como meta-learner
+        # Configurar stacking
         self._setup_stacking_model()
     
     def _setup_stacking_model(self):
-        """Configurar modelo de stacking con meta-learner optimizado"""
+        """Configurar modelo de stacking con REGULARIZACIÓN EXTREMA"""
         
-        # Crear versiones de modelos sin early stopping para stacking
+        logger.debug("🔗 Configurando modelo de stacking con regularización extrema...")
+        
+        # Crear versiones ULTRA REGULARIZADAS para stacking
         xgb_stacking = xgb.XGBClassifier(
-            n_estimators=100,  # Reducido para stacking
-            max_depth=6,
-            learning_rate=0.1,
-            subsample=0.8,
-            colsample_bytree=0.8,
+            n_estimators=30,        # Reducido drásticamente
+            max_depth=3,            # Muy limitado
+            learning_rate=0.05,     # Lento
+            subsample=0.6,          # Muy reducido
+            colsample_bytree=0.6,   # Muy reducido
+            reg_alpha=2.0,          # Alta regularización L1
+            reg_lambda=3.0,         # Alta regularización L2
+            min_child_weight=10,    # Alto
+            gamma=1.0,              # Alto
             random_state=42,
             eval_metric='logloss',
             n_jobs=-1
-            # Sin early_stopping_rounds para stacking
         )
         
         lgb_stacking = lgb.LGBMClassifier(
-            n_estimators=100,  # Reducido para stacking
-            max_depth=6,
-            learning_rate=0.1,
-            subsample=0.8,
-            colsample_bytree=0.8,
+            n_estimators=30,        # Reducido drásticamente
+            max_depth=3,            # Muy limitado
+            learning_rate=0.05,     # Lento
+            subsample=0.6,          # Muy reducido
+            colsample_bytree=0.6,   # Muy reducido
+            reg_alpha=2.0,          # Alta regularización L1
+            reg_lambda=3.0,         # Alta regularización L2
+            min_child_samples=40,   # Muy alto
+            min_split_gain=0.3,     # Alto
+            num_leaves=10,          # Muy limitado
+            feature_fraction=0.5,   # Muy reducido
             random_state=42,
             verbose=-1,
             n_jobs=-1
-            # Sin early_stopping_rounds para stacking
         )
         
         rf_stacking = RandomForestClassifier(
-            n_estimators=100,  # Reducido para stacking
-            max_depth=10,
-            min_samples_split=5,
-            min_samples_leaf=2,
+            n_estimators=30,        # Reducido drásticamente
+            max_depth=4,            # Muy limitado
+            min_samples_split=40,   # Muy alto
+            min_samples_leaf=20,    # Muy alto
+            max_features=0.3,       # Muy reducido
+            bootstrap=True,         # Asegurar que bootstrap esté habilitado
             random_state=42,
             n_jobs=-1
         )
         
         et_stacking = ExtraTreesClassifier(
-            n_estimators=100,  # Reducido para stacking
-            max_depth=10,
-            min_samples_split=5,
-            min_samples_leaf=2,
+            n_estimators=30,        # Reducido drásticamente
+            max_depth=4,            # Muy limitado
+            min_samples_split=50,   # Muy alto
+            min_samples_leaf=25,    # Muy alto
+            max_features=0.2,       # Extremadamente reducido
+            bootstrap=True,         # Asegurar que bootstrap esté habilitado
             random_state=42,
             n_jobs=-1
         )
         
         gb_stacking = GradientBoostingClassifier(
-            n_estimators=100,  # Reducido para stacking
-            max_depth=6,
-            learning_rate=0.1,
+            n_estimators=30,        # Reducido drásticamente
+            max_depth=3,            # Muy limitado
+            learning_rate=0.05,     # Lento
+            subsample=0.5,          # Muy reducido
+            min_samples_split=40,   # Muy alto
+            min_samples_leaf=20,    # Muy alto
+            max_features=0.3,       # Muy reducido
+            validation_fraction=0.2,
+            n_iter_no_change=3,     # Early stopping muy agresivo
+            tol=1e-3,
             random_state=42
-            # Sin validation_fraction para stacking
         )
         
         nn_stacking = PyTorchNBAClassifier(
-            hidden_size=64,  # Reducido para stacking
-            epochs=50,  # Reducido para stacking
-            early_stopping_patience=10,
+            hidden_size=16,         # Extremadamente pequeño
+            epochs=30,              # Muy reducido
+            early_stopping_patience=5,  # Muy agresivo
+            dropout_rate=0.8,       # Extremadamente alto
+            weight_decay=0.1,       # Muy alto
+            learning_rate=0.0001,   # Muy lento
             device=self.device,
             min_memory_gb=self.min_memory_gb,
             auto_batch_size=True
@@ -1231,26 +1407,41 @@ class IsWinModel:
             ('nn', nn_stacking)
         ]
         
-        # Meta-learner: Regresión Logística con regularización
+        # Meta-learner: Regresión Logística con REGULARIZACIÓN EXTREMA
         meta_learner = LogisticRegression(
-            C=1.0,
-            penalty='l2',
-            solver='liblinear',
-            random_state=42,
+            C=0.1,                  # Reducido drásticamente de 1.0 (más regularización)
+            penalty='l2', 
+            solver='liblinear', 
+            random_state=42, 
             max_iter=1000
         )
         
-        # Modelo de stacking con validación cruzada
+        # Modelo de stacking con validación cruzada MÁS AGRESIVA
         self.stacking_model = StackingClassifier(
             estimators=base_estimators,
             final_estimator=meta_learner,
-            cv=StratifiedKFold(n_splits=5, shuffle=True, random_state=42),
+            cv=StratifiedKFold(n_splits=3, shuffle=True, random_state=42),  # Reducido de 5 a 3
             stack_method='predict_proba',
             n_jobs=-1
         )
+        
+        logger.debug("✅ Modelo de stacking configurado con regularización extrema")
     
     def get_feature_columns(self, df: pd.DataFrame) -> List[str]:
-        """Obtener columnas de features generadas"""
+        """Obtener columnas de features generadas CON CACHE"""
+        
+        # Si ya tenemos features generadas y el DataFrame es similar, reutilizar
+        if (hasattr(self.feature_engineer, '_last_data_hash') and 
+            self.feature_engineer._last_data_hash is not None and 
+            self.feature_engineer.feature_columns):
+            
+            # Verificar si es el mismo DataFrame
+            current_hash = self.feature_engineer._get_data_hash(df)
+            if current_hash == self.feature_engineer._last_data_hash:
+                logger.debug("Reutilizando features desde cache")
+                return self.feature_engineer.feature_columns
+        
+        # Solo generar features si es necesario
         feature_columns = self.feature_engineer.generate_all_features(df)
         
         # Filtrar features que realmente existen y no son problemáticas
@@ -1262,15 +1453,25 @@ class IsWinModel:
                 if null_pct < 0.5:  # Menos del 50% de nulos
                     available_features.append(feature)
         
-        logger.info(f"Features disponibles: {len(available_features)} de "
-                   f"{len(feature_columns)}")
+        # VERIFICACIÓN ADICIONAL: Asegurar que features críticas estén presentes
+        critical_features = ['home_win_rate_10g', 'away_win_rate_10g']
+        for critical_feature in critical_features:
+            if critical_feature not in available_features and critical_feature in df.columns:
+                available_features.append(critical_feature)
+                logger.debug(f"Agregada feature crítica: {critical_feature}")
+            elif critical_feature not in df.columns:
+                logger.warning(f"Feature crítica faltante: {critical_feature}")
+        
+        # Solo log si hay diferencias significativas
+        if len(available_features) != len(feature_columns):
+            logger.debug(f"Features filtradas: {len(available_features)}/{len(feature_columns)} disponibles")
+        
         return available_features
     
-    def train(self, df: pd.DataFrame, 
-              validation_split: float = 0.2) -> Dict[str, Any]:
+    def train(self, df: pd.DataFrame, validation_split: float = 0.2) -> Dict[str, Any]:
         """Entrenamiento completo del modelo con validación y optimización"""
         
-        logger.info("Iniciando entrenamiento del modelo de predicción de victorias...")
+        logger.info("Iniciando entrenamiento...")
         
         # Generar features
         feature_columns = self.get_feature_columns(df)
@@ -1278,14 +1479,13 @@ class IsWinModel:
         if not feature_columns:
             raise ValueError("No hay features disponibles para el entrenamiento")
         
-        # Preparar datos usando DataProcessor
-        X = df[feature_columns].fillna(0)  # Rellenar nulos
+        # Preparar datos
+        X = df[feature_columns].fillna(0)
         y = df['is_win']
         
         # Verificar balance de clases
         class_balance = y.value_counts(normalize=True)
-        logger.info(f"Balance de clases: Victorias: {class_balance.get(1, 0):.3f}, "
-                   f"Derrotas: {class_balance.get(0, 0):.3f}")
+        logger.info(f"Balance: Victorias={class_balance.get(1, 0):.3f}, Derrotas={class_balance.get(0, 0):.3f}")
         
         # Preparar datos de entrenamiento
         X_train_scaled, X_val_scaled, y_train, y_val, self.scaler = (
@@ -1297,21 +1497,30 @@ class IsWinModel:
             X_train_scaled, y_train, X_val_scaled, y_val
         )
         
+        # Log resumen de modelos individuales
+        OptimizedLogger.log_model_summary(logger, individual_results)
+        
         # Optimización bayesiana (si está habilitada)
         if self.optimize_hyperparams and BAYESIAN_AVAILABLE:
+            logger.info("Optimización bayesiana...")
             self._optimize_with_bayesian(X_train_scaled, y_train)
         
         # Entrenar modelo de stacking
-        logger.info("Entrenando modelo de stacking...")
+        logger.info("Entrenando stacking...")
         self.stacking_model.fit(X_train_scaled, y_train)
         
         # Evaluación completa
         stacking_val_pred = self.stacking_model.predict(X_val_scaled)
         stacking_val_proba = self.stacking_model.predict_proba(X_val_scaled)[:, 1]
         
-        # Métricas del stacking usando MetricsCalculator
+        # Métricas del stacking
         stacking_metrics = MetricsCalculator.calculate_classification_metrics(
             y_val, stacking_val_pred, stacking_val_proba
+        )
+        
+        # Log métricas de stacking
+        OptimizedLogger.log_performance_metrics(
+            logger, stacking_metrics, "Stacking", "Validación"
         )
         
         # Compilar resultados
@@ -1331,8 +1540,7 @@ class IsWinModel:
         # Feature importance
         self.feature_importance = self._calculate_feature_importance(feature_columns)
         
-        logger.info(f"Entrenamiento completado. Accuracy de stacking: "
-                   f"{stacking_metrics['accuracy']:.4f}")
+        logger.info(f"Entrenamiento completado. Accuracy: {stacking_metrics['accuracy']:.3f}")
         
         return self.training_results
     
@@ -1341,9 +1549,12 @@ class IsWinModel:
         """Entrenar modelos individuales con early stopping optimizado"""
         
         results = {}
+        total_models = len(self.models)
         
-        for name, model in self.models.items():
-            logger.info(f"Entrenando modelo con early stopping: {name}")
+        logger.info(f"🎯 Entrenando {total_models} modelos individuales...")
+        
+        for idx, (name, model) in enumerate(self.models.items(), 1):
+            logger.info(f"🔄 [{idx}/{total_models}] Entrenando: {name}")
             
             try:
                 # Entrenar modelo según su tipo con early stopping específico
@@ -1395,92 +1606,166 @@ class IsWinModel:
                     model, name
                 )
                 
+                # Calcular overfitting
+                overfitting = train_metrics['accuracy'] - val_metrics['accuracy']
+                
                 results[name] = {
                     'train_metrics': train_metrics,
                     'val_metrics': val_metrics,
-                    'overfitting': train_metrics['accuracy'] - val_metrics['accuracy'],
+                    'overfitting': overfitting,
                     'early_stopping_info': early_stopping_info
                 }
                 
-                logger.info(f"{name} - Val Accuracy: {val_metrics['accuracy']:.4f}, "
-                           f"Val AUC: {val_metrics['auc_roc']:.4f}")
+                # Log métricas usando sistema optimizado (solo métricas principales)
+                acc = val_metrics['accuracy']
+                auc = val_metrics['auc_roc']
+                logger.info(f"✅ {name}: ACC={acc:.3f}, AUC={auc:.3f}")
                 
+                # Log información de early stopping si aplica (solo si es relevante)
                 if early_stopping_info.get('stopped_early'):
-                    logger.info(f"  Early stopping activado en "
-                               f"{early_stopping_info.get('best_iteration', 'N/A')}")
+                    best_iter = early_stopping_info.get('best_iteration', 'N/A')
+                    logger.debug(f"⏹️  {name} | Early stopping en iteración {best_iter}")
+                
+                # Advertencia de overfitting (solo si es significativo)
+                if overfitting > 0.1:
+                    logger.warning(f"🚨 {name} | Overfitting detectado: {overfitting:+.4f}")
+                elif overfitting > 0.05:
+                    logger.warning(f"⚠️  {name} | Overfitting moderado: {overfitting:+.4f}")
                 
             except Exception as e:
-                logger.error(f"Error entrenando {name}: {e}")
+                logger.error(f"❌ Error entrenando {name}: {e}")
                 results[name] = {'error': str(e)}
         
+        logger.info(f"✅ Entrenamiento individual completado ({len(results)} modelos)")
         return results
     
     def predict(self, df: pd.DataFrame) -> np.ndarray:
-        """Predicción de victorias usando el modelo de stacking"""
+        """Realizar predicciones con el modelo entrenado"""
+        if not self.is_trained:
+            raise ValueError("El modelo no ha sido entrenado")
         
-        if self.stacking_model is None:
-            raise ValueError("Modelo no entrenado. Llama a train() primero.")
+        # Validar consistencia de features
+        self._validate_feature_consistency(df, "predicción")
         
-        # Generar features
+        # Obtener features
         feature_columns = self.get_feature_columns(df)
         X = df[feature_columns].fillna(0)
         
-        # Escalar features usando DataProcessor
-        X_scaled = DataProcessor.prepare_prediction_data(X, self.scaler)
+        # Verificar que tenemos las mismas features que en entrenamiento
+        if hasattr(self, 'feature_columns_') and self.feature_columns_:
+            # Asegurar que tenemos exactamente las mismas features
+            missing_features = set(self.feature_columns_) - set(feature_columns)
+            if missing_features:
+                logger.warning(f"Agregando features faltantes con valores por defecto: {list(missing_features)}")
+                for feature in missing_features:
+                    X[feature] = 0.5  # Valor neutro
+            
+            # Reordenar columnas para que coincidan con el entrenamiento
+            X = X.reindex(columns=self.feature_columns_, fill_value=0.5)
         
-        # Predicción
-        predictions = self.stacking_model.predict(X_scaled)
+        # Escalar features
+        X_scaled = self.scaler.transform(X)
+        X_scaled = pd.DataFrame(X_scaled, columns=X.columns, index=X.index)
+        
+        # Predicción con modelo stacking
+        if self.stacking_model is not None:
+            predictions = self.stacking_model.predict(X_scaled)
+        else:
+            # Fallback: usar modelo con mejor rendimiento
+            best_model_name = max(self.cv_results.items(), key=lambda x: x[1]['accuracy_mean'])[0]
+            best_model = self.models[best_model_name]
+            predictions = best_model.predict(X_scaled)
         
         return predictions
     
     def predict_proba(self, df: pd.DataFrame) -> np.ndarray:
-        """Predicción de probabilidades de victoria"""
+        """Obtener probabilidades de predicción con el modelo entrenado"""
+        if not self.is_trained:
+            raise ValueError("El modelo no ha sido entrenado")
         
-        if self.stacking_model is None:
-            raise ValueError("Modelo no entrenado. Llama a train() primero.")
+        # Validar consistencia de features
+        self._validate_feature_consistency(df, "predicción de probabilidades")
         
-        # Generar features
+        # Obtener features
         feature_columns = self.get_feature_columns(df)
         X = df[feature_columns].fillna(0)
         
-        # Escalar features usando DataProcessor
-        X_scaled = DataProcessor.prepare_prediction_data(X, self.scaler)
+        # Verificar que tenemos las mismas features que en entrenamiento
+        if hasattr(self, 'feature_columns_') and self.feature_columns_:
+            # Asegurar que tenemos exactamente las mismas features
+            missing_features = set(self.feature_columns_) - set(feature_columns)
+            if missing_features:
+                logger.warning(f"Agregando features faltantes con valores por defecto: {list(missing_features)}")
+                for feature in missing_features:
+                    X[feature] = 0.5  # Valor neutro
+            
+            # Reordenar columnas para que coincidan con el entrenamiento
+            X = X.reindex(columns=self.feature_columns_, fill_value=0.5)
         
-        # Predicción de probabilidades
-        probabilities = self.stacking_model.predict_proba(X_scaled)
+        # Escalar features
+        X_scaled = self.scaler.transform(X)
+        X_scaled = pd.DataFrame(X_scaled, columns=X.columns, index=X.index)
+        
+        # Predicción de probabilidades con modelo stacking
+        if self.stacking_model is not None:
+            probabilities = self.stacking_model.predict_proba(X_scaled)
+        else:
+            # Fallback: usar modelo con mejor rendimiento
+            best_model_name = max(self.cv_results.items(), key=lambda x: x[1]['accuracy_mean'])[0]
+            best_model = self.models[best_model_name]
+            probabilities = best_model.predict_proba(X_scaled)
         
         return probabilities
     
     def _optimize_with_bayesian(self, X_train, y_train):
-        """Optimización bayesiana de hiperparámetros"""
+        """Optimización bayesiana de hiperparámetros MEJORADA"""
         
         if not BAYESIAN_AVAILABLE:
-            logger.warning("skopt no disponible - saltando optimización bayesiana")
+            logger.warning("⚠️  Optimización bayesiana no disponible - skopt no instalado")
             return
         
-        logger.info("Iniciando optimización bayesiana de hiperparámetros...")
+        logger.info("🔧 Iniciando optimización bayesiana de hiperparámetros...")
         
-        # Optimizar XGBoost
-        self._optimize_xgboost_bayesian(X_train, y_train)
+        # Distribuir llamadas entre modelos de manera eficiente
+        calls_per_model = max(8, self.bayesian_n_calls // 3)  # Mínimo 8 llamadas por modelo
         
-        # Optimizar LightGBM
-        self._optimize_lightgbm_bayesian(X_train, y_train)
+        # Optimizar solo los modelos más importantes
+        logger.info(f"🎯 Optimizando 3 modelos principales con {calls_per_model} llamadas cada uno...")
         
-        # Optimizar Red Neuronal
-        self._optimize_neural_net_bayesian(X_train, y_train)
+        # 1. Optimizar XGBoost (modelo principal)
+        logger.info("🚀 Optimizando XGBoost...")
+        self._optimize_xgboost_bayesian(X_train, y_train, calls_per_model)
+        
+        # 2. Optimizar LightGBM (modelo complementario)
+        logger.info("🚀 Optimizando LightGBM...")
+        self._optimize_lightgbm_bayesian(X_train, y_train, calls_per_model)
+        
+        # 3. Optimizar Red Neuronal (modelo diverso)
+        logger.info("🚀 Optimizando Red Neuronal...")
+        self._optimize_neural_net_bayesian(X_train, y_train, calls_per_model)
+        
+        logger.info("✅ Optimización bayesiana completada")
+        
+        # Log resumen de resultados
+        if hasattr(self, 'bayesian_results') and self.bayesian_results:
+            logger.info("📊 Resultados de optimización bayesiana:")
+            for model_name, results in self.bayesian_results.items():
+                if 'best_score' in results:
+                    score = results['best_score']
+                    logger.info(f"  • {model_name}: Mejor AUC = {score:.4f}")
     
-    def _optimize_xgboost_bayesian(self, X_train, y_train):
-        """Optimización bayesiana específica para XGBoost"""
+    def _optimize_xgboost_bayesian(self, X_train, y_train, n_calls=10):
+        """Optimización bayesiana específica para XGBoost MEJORADA"""
         
-        # Espacio de búsqueda
+        # Espacio de búsqueda REDUCIDO pero efectivo
         space = [
-            Integer(50, 300, name='n_estimators'),
-            Integer(3, 10, name='max_depth'),
-            Real(0.01, 0.3, name='learning_rate'),
-            Real(0.5, 1.0, name='subsample'),
-            Real(0.5, 1.0, name='colsample_bytree'),
-            Real(0.01, 10.0, name='reg_alpha'),
-            Real(0.01, 10.0, name='reg_lambda')
+            Integer(30, 100, name='n_estimators'),
+            Integer(3, 6, name='max_depth'),
+            Real(0.01, 0.1, name='learning_rate'),
+            Real(0.6, 0.9, name='subsample'),
+            Real(0.6, 0.9, name='colsample_bytree'),
+            Real(1.0, 5.0, name='reg_alpha'),
+            Real(2.0, 8.0, name='reg_lambda')
         ]
         
         # Función objetivo específica para XGBoost
@@ -1506,9 +1791,10 @@ class IsWinModel:
             return -cv_scores.mean()
         
         # Ejecutar optimización
+        logger.debug(f"Ejecutando {n_calls} llamadas de optimización para XGBoost...")
         result = gp_minimize(
             objective, space,
-            n_calls=max(10, self.bayesian_n_calls // 2),  # Asegurar mínimo 10 llamadas
+            n_calls=n_calls,  # Asegurar mínimo 10 llamadas
             random_state=42,
             n_jobs=1
         )
@@ -1522,21 +1808,21 @@ class IsWinModel:
             'convergence': result.func_vals
         }
         
-        logger.info(f"XGBoost optimizado - Mejor AUC: {-result.fun:.4f}")
+        logger.info(f"✅ XGBoost optimizado | Mejor AUC: {-result.fun:.4f}")
     
-    def _optimize_lightgbm_bayesian(self, X_train, y_train):
-        """Optimización bayesiana específica para LightGBM"""
+    def _optimize_lightgbm_bayesian(self, X_train, y_train, n_calls=10):
+        """Optimización bayesiana específica para LightGBM MEJORADA"""
         
-        # Espacio de búsqueda
+        # Espacio de búsqueda REDUCIDO pero efectivo
         space = [
-            Integer(50, 300, name='n_estimators'),
-            Integer(3, 10, name='max_depth'),
-            Real(0.01, 0.3, name='learning_rate'),
-            Real(0.5, 1.0, name='subsample'),
-            Real(0.5, 1.0, name='colsample_bytree'),
-            Real(0.01, 10.0, name='reg_alpha'),
-            Real(0.01, 10.0, name='reg_lambda'),
-            Integer(10, 100, name='min_child_samples')
+            Integer(30, 100, name='n_estimators'),
+            Integer(3, 6, name='max_depth'),
+            Real(0.01, 0.1, name='learning_rate'),
+            Real(0.6, 0.9, name='subsample'),
+            Real(0.6, 0.9, name='colsample_bytree'),
+            Real(1.0, 5.0, name='reg_alpha'),
+            Real(2.0, 8.0, name='reg_lambda'),
+            Integer(20, 60, name='min_child_samples')
         ]
         
         # Función objetivo específica para LightGBM
@@ -1550,10 +1836,10 @@ class IsWinModel:
                 n_jobs=-1
             )
             
-            # Validación cruzada estratificada
+            # Validación cruzada estratificada RÁPIDA
             cv_scores = cross_val_score(
                 model, X_train, y_train,
-                cv=StratifiedKFold(n_splits=5, shuffle=True, random_state=42),
+                cv=StratifiedKFold(n_splits=3, shuffle=True, random_state=42),
                 scoring='roc_auc',
                 n_jobs=-1
             )
@@ -1562,9 +1848,10 @@ class IsWinModel:
             return -cv_scores.mean()
         
         # Ejecutar optimización
+        logger.debug(f"Ejecutando {n_calls} llamadas de optimización para LightGBM...")
         result = gp_minimize(
             objective, space,
-            n_calls=max(10, self.bayesian_n_calls // 2),  # Asegurar mínimo 10 llamadas
+            n_calls=n_calls,
             random_state=42,
             n_jobs=1
         )
@@ -1578,18 +1865,18 @@ class IsWinModel:
             'convergence': result.func_vals
         }
         
-        logger.info(f"LightGBM optimizado - Mejor AUC: {-result.fun:.4f}")
+        logger.info(f"✅ LightGBM optimizado | Mejor AUC: {-result.fun:.4f}")
     
-    def _optimize_neural_net_bayesian(self, X_train, y_train):
-        """Optimización bayesiana para la red neuronal"""
+    def _optimize_neural_net_bayesian(self, X_train, y_train, n_calls=10):
+        """Optimización bayesiana para la red neuronal MEJORADA"""
         
-        # Espacio de búsqueda
+        # Espacio de búsqueda REDUCIDO pero efectivo
         space = [
-            Integer(64, 256, name='hidden_size'),
-            Real(0.0001, 0.01, name='learning_rate'),
-            Real(0.001, 0.1, name='weight_decay'),
-            Real(0.1, 0.5, name='dropout_rate'),
-            Integer(16, 64, name='batch_size')
+            Integer(32, 128, name='hidden_size'),
+            Real(0.0001, 0.005, name='learning_rate'),
+            Real(0.01, 0.08, name='weight_decay'),
+            Real(0.3, 0.7, name='dropout_rate'),
+            Integer(32, 128, name='batch_size')
         ]
         
         @use_named_args(space)
@@ -1604,12 +1891,12 @@ class IsWinModel:
                 weight_decay=params['weight_decay'],
                 dropout_rate=params['dropout_rate'],
                 batch_size=params['batch_size'],
-                epochs=100,  # Reducido para optimización
-                early_stopping_patience=15,
+                epochs=50,  # Reducido para optimización más rápida
+                early_stopping_patience=10,
                 device=self.device
             )
             
-            # Validación cruzada manual (PyTorch necesita manejo especial)
+            # Validación cruzada manual RÁPIDA (solo 3 folds)
             cv_scores = []
             skf = StratifiedKFold(n_splits=3, shuffle=True, random_state=42)
             
@@ -1630,34 +1917,46 @@ class IsWinModel:
             return -np.mean(cv_scores)
         
         # Ejecutar optimización
+        logger.debug(f"Ejecutando {n_calls} llamadas de optimización para Red Neuronal...")
         result = gp_minimize(
             objective, space,
-            n_calls=max(10, self.bayesian_n_calls // 2),  # Asegurar mínimo 10 llamadas
+            n_calls=n_calls,
             random_state=42,
             n_jobs=1
         )
         
         # Actualizar mejor modelo
         best_params = dict(zip([dim.name for dim in space], result.x))
-        self.models['neural_network'].set_params(**best_params)
+        
+        # Crear nuevo modelo con mejores parámetros
+        self.models['neural_network'] = PyTorchNBAClassifier(
+            hidden_size=best_params['hidden_size'],
+            learning_rate=best_params['learning_rate'],
+            weight_decay=best_params['weight_decay'],
+            dropout_rate=best_params['dropout_rate'],
+            batch_size=int(best_params['batch_size']),
+            epochs=100,  # Usar más epochs para el modelo final
+            early_stopping_patience=15,
+            device=self.device
+        )
+        
         self.bayesian_results['neural_network'] = {
             'best_score': -result.fun,
             'best_params': best_params,
             'convergence': result.func_vals
         }
         
-        logger.info(f"Red Neuronal optimizada - Mejor AUC: {-result.fun:.4f}")
+        logger.info(f"✅ Red Neuronal optimizada | Mejor AUC: {-result.fun:.4f}")
     
     def _perform_cross_validation(self, X, y) -> Dict[str, Any]:
         """
-        Validación cruzada ESTRICTA con múltiples métricas
-        Usar estratificación temporal para evitar data leakage temporal
+        Validación cruzada CORREGIDA con 5 folds
+        Generar métricas CV válidas para el modelo
         """
-        logger.info("Realizando validación cruzada estricta...")
+        logger.info("🔄 Realizando validación cruzada con 5 folds...")
         
-        # Configurar validación cruzada ESTRICTA
-        # Usar más folds para validación rigurosa
-        n_splits = 10  # Incrementado de 5 a 10
+        # Configurar validación cruzada con 5 folds
+        n_splits = 5
         cv = StratifiedKFold(
             n_splits=n_splits, 
             shuffle=True, 
@@ -1666,19 +1965,19 @@ class IsWinModel:
         
         cv_results = {}
         
-        # Métricas de evaluación exhaustivas
-        scoring_metrics = [
-            'accuracy', 'precision', 'recall', 'f1', 
-            'roc_auc', 'neg_log_loss'
-        ]
+        # Métricas de evaluación
+        scoring_metrics = ['accuracy', 'roc_auc', 'precision', 'recall', 'f1']
+        
+        logger.info(f"📊 Configuración CV | Folds: {n_splits} | Métricas: {len(scoring_metrics)}")
         
         # Validación cruzada para cada modelo
-        for model_name, model in self.models.items():
-            logger.info(f"Validación cruzada para {model_name}...")
+        total_models = len(self.models)
+        for idx, (model_name, model) in enumerate(self.models.items(), 1):
+            logger.debug(f"🔄 [{idx}/{total_models}] Validación cruzada: {model_name}")
             
             model_cv_results = {}
             
-            # Evaluar múltiples métricas
+            # Evaluar métricas
             for metric in scoring_metrics:
                 try:
                     scores = cross_val_score(
@@ -1689,75 +1988,95 @@ class IsWinModel:
                     )
                     
                     model_cv_results[metric] = {
-                        'mean': scores.mean(),
-                        'std': scores.std(),
+                        'mean': float(scores.mean()),
+                        'std': float(scores.std()),
                         'scores': scores.tolist()
                     }
                     
-                    # DETECTAR SOBREAJUSTE
-                    # Si std es muy pequeña, puede indicar sobreajuste
-                    if scores.std() < 0.01 and metric in ['accuracy', 'roc_auc']:
-                        logger.warning(
-                            f"⚠️  POSIBLE SOBREAJUSTE en {model_name}: "
-                            f"{metric} std = {scores.std():.4f} (muy bajo)"
-                        )
-                    
                 except Exception as e:
-                    logger.error(f"Error en CV para {model_name} - {metric}: {e}")
+                    logger.error(f"❌ Error en CV para {model_name} - {metric}: {e}")
                     model_cv_results[metric] = {
                         'mean': 0.0, 'std': 0.0, 'scores': []
                     }
             
+            # Log métricas principales del modelo (solo accuracy y AUC)
+            if 'accuracy' in model_cv_results and 'roc_auc' in model_cv_results:
+                acc_mean = model_cv_results['accuracy']['mean']
+                acc_std = model_cv_results['accuracy']['std']
+                auc_mean = model_cv_results['roc_auc']['mean']
+                auc_std = model_cv_results['roc_auc']['std']
+                
+                logger.info(f"📈 {model_name} CV | ACC: {acc_mean:.4f}±{acc_std:.4f} | "
+                           f"AUC: {auc_mean:.4f}±{auc_std:.4f}")
+            
             cv_results[model_name] = model_cv_results
         
-        # VALIDACIÓN ADICIONAL: Hold-out temporal
-        # Dividir por tiempo para simular predicción futura real
-        if 'Date' in X.index.names or len(X) > 1000:
-            logger.info("Realizando validación temporal hold-out...")
-            
-            # Usar últimos 20% como test temporal
-            split_idx = int(len(X) * 0.8)
-            X_temporal_train = X.iloc[:split_idx]
-            X_temporal_test = X.iloc[split_idx:]
-            y_temporal_train = y.iloc[:split_idx]
-            y_temporal_test = y.iloc[split_idx:]
-            
-            temporal_results = {}
-            
-            for model_name, model in self.models.items():
+        # VALIDACIÓN CRUZADA DEL STACKING MODEL
+        logger.info("🔄 Validación cruzada del modelo Stacking...")
+        try:
+            stacking_cv_results = {}
+            for metric in scoring_metrics:
                 try:
-                    # Entrenar en datos tempranos
-                    model_copy = model.__class__(**model.get_params())
-                    model_copy.fit(X_temporal_train, y_temporal_train)
+                    scores = cross_val_score(
+                        self.stacking_model, X, y,
+                        cv=cv,
+                        scoring=metric,
+                        n_jobs=-1
+                    )
                     
-                    # Predecir en datos futuros
-                    y_pred = model_copy.predict(X_temporal_test)
-                    y_proba = model_copy.predict_proba(X_temporal_test)[:, 1]
-                    
-                    temporal_results[model_name] = {
-                        'accuracy': accuracy_score(y_temporal_test, y_pred),
-                        'roc_auc': roc_auc_score(y_temporal_test, y_proba)
+                    stacking_cv_results[metric] = {
+                        'mean': float(scores.mean()),
+                        'std': float(scores.std()),
+                        'scores': scores.tolist()
                     }
                     
                 except Exception as e:
-                    logger.error(f"Error en validación temporal para {model_name}: {e}")
-                    temporal_results[model_name] = {'accuracy': 0.0, 'roc_auc': 0.5}
+                    logger.error(f"❌ Error en CV Stacking - {metric}: {e}")
+                    stacking_cv_results[metric] = {
+                        'mean': 0.0, 'std': 0.0, 'scores': []
+                    }
             
-            cv_results['temporal_validation'] = temporal_results
+            cv_results['stacking'] = stacking_cv_results
+            
+            # Log métricas del stacking
+            if 'accuracy' in stacking_cv_results and 'roc_auc' in stacking_cv_results:
+                acc_mean = stacking_cv_results['accuracy']['mean']
+                acc_std = stacking_cv_results['accuracy']['std']
+                auc_mean = stacking_cv_results['roc_auc']['mean']
+                auc_std = stacking_cv_results['roc_auc']['std']
+                
+                logger.info(f"📈 Stacking CV | ACC: {acc_mean:.4f}±{acc_std:.4f} | "
+                           f"AUC: {auc_mean:.4f}±{auc_std:.4f}")
+                
+        except Exception as e:
+            logger.error(f"❌ Error en validación cruzada del Stacking: {e}")
+            cv_results['stacking'] = {'error': str(e)}
         
-        # RESUMEN DE ALERTAS DE SOBREAJUSTE
-        logger.info("\n=== ANÁLISIS DE SOBREAJUSTE ===")
+        # RESUMEN DE ALERTAS DE SOBREAJUSTE (simplificado)
+        logger.info("🔍 ANÁLISIS DE SOBREAJUSTE")
+        logger.info("=" * 50)
+        
+        overfitting_models = []
+        normal_models = []
+        
         for model_name in self.models.keys():
             if model_name in cv_results:
                 acc_std = cv_results[model_name].get('accuracy', {}).get('std', 0)
                 auc_std = cv_results[model_name].get('roc_auc', {}).get('std', 0)
                 
                 if acc_std < 0.02 or auc_std < 0.02:
-                    logger.warning(f"🚨 {model_name}: Variabilidad muy baja - POSIBLE SOBREAJUSTE")
-                elif acc_std < 0.05 or auc_std < 0.05:
-                    logger.warning(f"⚠️  {model_name}: Variabilidad baja - Monitorear sobreajuste")
+                    overfitting_models.append(model_name)
                 else:
-                    logger.info(f"✅ {model_name}: Variabilidad normal")
+                    normal_models.append(model_name)
+        
+        # Log consolidado
+        if overfitting_models:
+            logger.warning(f"🚨 Modelos con posible sobreajuste: {', '.join(overfitting_models)}")
+        if normal_models:
+            logger.info(f"✅ Modelos con variabilidad normal: {', '.join(normal_models)}")
+        
+        logger.info("=" * 50)
+        logger.info("✅ Validación cruzada completada")
         
         return cv_results
     
@@ -1837,6 +2156,8 @@ class IsWinModel:
         if 'is_win' not in df.columns:
             raise ValueError("Columna 'is_win' requerida para validación")
         
+        logger.info("🔍 Iniciando validación del modelo...")
+        
         # Predicciones
         y_true = df['is_win']
         y_pred = self.predict(df)
@@ -1845,6 +2166,11 @@ class IsWinModel:
         # Métricas de validación usando MetricsCalculator
         validation_metrics = MetricsCalculator.calculate_classification_metrics(
             y_true, y_pred, y_proba
+        )
+        
+        # Log métricas principales
+        OptimizedLogger.log_performance_metrics(
+            logger, validation_metrics, "Modelo", "Validación"
         )
         
         # Análisis por contexto
@@ -1860,12 +2186,14 @@ class IsWinModel:
                     y_true[home_mask], y_pred[home_mask]
                 )
                 context_analysis['home_accuracy'] = home_acc
+                logger.info(f"🏠 Accuracy en casa: {home_acc:.4f}")
             
             if away_mask.sum() > 0:
                 away_acc = accuracy_score(
                     y_true[away_mask], y_pred[away_mask]
                 )
                 context_analysis['away_accuracy'] = away_acc
+                logger.info(f"✈️  Accuracy visitante: {away_acc:.4f}")
         
         # Matriz de confusión
         cm = confusion_matrix(y_true, y_pred)
@@ -1880,8 +2208,8 @@ class IsWinModel:
             'sample_count': len(df)
         }
         
-        logger.info(f"Validación completada - Accuracy: "
-                   f"{validation_metrics['accuracy']:.4f}")
+        logger.info(f"✅ Validación completada | Muestras: {len(df)} | "
+                   f"Accuracy: {validation_metrics['accuracy']:.4f}")
         
         return validation_report
     
@@ -1890,6 +2218,8 @@ class IsWinModel:
         
         if save_path is None:
             save_path = "trained_models/is_win_model.joblib"
+        
+        logger.info(f"💾 Guardando modelo en: {save_path}")
         
         # Crear directorio si no existe
         os.makedirs(os.path.dirname(save_path), exist_ok=True)
@@ -1913,7 +2243,10 @@ class IsWinModel:
         # Guardar modelo
         joblib.dump(model_data, save_path)
         
-        logger.info(f"Modelo guardado en: {save_path}")
+        # Log información del modelo guardado
+        model_size_mb = os.path.getsize(save_path) / (1024 * 1024)
+        logger.info(f"✅ Modelo guardado | Tamaño: {model_size_mb:.1f}MB | "
+                   f"Modelos: {len(self.models)} | Features: {len(self.feature_importance.get('average', {}))}")
         
         return save_path
     
@@ -1923,6 +2256,8 @@ class IsWinModel:
         
         if not os.path.exists(model_path):
             raise FileNotFoundError(f"Modelo no encontrado en: {model_path}")
+        
+        logger.info(f"📂 Cargando modelo desde: {model_path}")
         
         # Cargar datos del modelo
         model_data = joblib.load(model_path)
@@ -1939,7 +2274,13 @@ class IsWinModel:
         model.feature_importance = model_data.get('feature_importance', {})
         model.bayesian_results = model_data.get('bayesian_results', {})
         
-        logger.info(f"Modelo cargado desde: {model_path}")
+        # Log información del modelo cargado
+        metadata = model_data.get('model_metadata', {})
+        created_at = metadata.get('created_at', 'Desconocido')
+        device = metadata.get('device', 'Desconocido')
+        
+        logger.info(f"✅ Modelo cargado | Creado: {created_at} | "
+                   f"Dispositivo: {device} | Modelos: {len(model.models)}")
         
         return model
     
@@ -1947,7 +2288,14 @@ class IsWinModel:
         """Resumen completo del entrenamiento"""
         
         if not self.training_results:
+            logger.warning("⚠️  Modelo no entrenado - no hay resumen disponible")
             return {"error": "Modelo no entrenado"}
+        
+        logger.info("📊 Generando resumen de entrenamiento...")
+        
+        # Obtener métricas CV del stacking si están disponibles
+        cv_data = self.training_results.get('cross_validation', {})
+        stacking_cv = cv_data.get('stacking', {})
         
         summary = {
             "model_performance": {
@@ -1957,12 +2305,10 @@ class IsWinModel:
                 "stacking_auc": self.training_results.get(
                     'stacking_metrics', {}
                 ).get('auc_roc', 0),
-                "cv_accuracy_mean": self.training_results.get(
-                    'cross_validation', {}
-                ).get('accuracy', {}).get('mean', 0),
-                "cv_accuracy_std": self.training_results.get(
-                    'cross_validation', {}
-                ).get('accuracy', {}).get('std', 0)
+                "cv_accuracy_mean": stacking_cv.get('accuracy', {}).get('mean', 0),
+                "cv_accuracy_std": stacking_cv.get('accuracy', {}).get('std', 0),
+                "cv_auc_mean": stacking_cv.get('roc_auc', {}).get('mean', 0),
+                "cv_auc_std": stacking_cv.get('roc_auc', {}).get('std', 0)
             },
             "training_info": {
                 "feature_count": self.training_results.get('feature_count', 0),
@@ -1989,14 +2335,27 @@ class IsWinModel:
                     "overfitting": results.get('overfitting', 0)
                 }
         
+        # Log resumen de rendimiento
+        stacking_acc = summary["model_performance"]["stacking_accuracy"]
+        stacking_auc = summary["model_performance"]["stacking_auc"]
+        cv_acc_mean = summary["model_performance"]["cv_accuracy_mean"]
+        cv_acc_std = summary["model_performance"]["cv_accuracy_std"]
+        feature_count = summary["training_info"]["feature_count"]
+        
+        logger.info(f"📈 Resumen generado | Stacking ACC: {stacking_acc:.4f} | "
+                   f"AUC: {stacking_auc:.4f} | CV ACC: {cv_acc_mean:.4f}±{cv_acc_std:.4f} | "
+                   f"Features: {feature_count}")
+        
         return summary
     
     def get_gpu_info(self) -> Dict[str, Any]:
         """Obtener información completa del GPU configurado"""
         
+        logger.debug("🖥️  Recopilando información de GPU...")
+        
         gpu_info = {
             'configuration': self.gpu_config,
-            'current_device': self.device,
+            'current_device': str(self.device) if self.device else None,
             'available_devices': GPUManager.get_available_devices(),
             'memory_requirements': {
                 'min_memory_gb': self.min_memory_gb,
@@ -2006,7 +2365,7 @@ class IsWinModel:
         
         # Información específica del dispositivo actual
         if self.device:
-            gpu_info['current_device_info'] = GPUManager.get_device_info(self.device)
+            gpu_info['current_device_info'] = GPUManager.get_device_info(str(self.device))
         
         # Información de red neuronal si está disponible
         if ('neural_network' in self.models and 
@@ -2015,44 +2374,770 @@ class IsWinModel:
                 self.models['neural_network'].get_gpu_memory_summary()
             )
         
+        logger.debug(f"✅ Información GPU recopilada | Dispositivo: {self.device}")
+        
         return gpu_info
     
-    def optimize_for_gpu(self, target_memory_gb: float = None) -> Dict[str, Any]:
-        """Optimizar configuración del modelo para GPU específico"""
+    def _validate_feature_consistency(self, df: pd.DataFrame, context: str = "evaluación") -> bool:
+        """
+        Validar que las features del DataFrame sean consistentes con las del entrenamiento
         
-        if target_memory_gb is None:
-            device_info = GPUManager.get_device_info(self.device)
-            if device_info.get('memory_info'):
-                target_memory_gb = device_info['memory_info']['free_gb'] * 0.8  # 80% de memoria libre
-            else:
-                target_memory_gb = 2.0  # Valor por defecto
+        Args:
+            df: DataFrame a validar
+            context: Contexto de la validación (entrenamiento/evaluación)
+            
+        Returns:
+            True si las features son consistentes, False si hay problemas
+        """
+        if not hasattr(self, 'feature_columns_') or not self.feature_columns_:
+            logger.warning(f"No hay features de referencia para validar en {context}")
+            return True  # No podemos validar, asumir que está bien
         
-        optimization_info = {
-            'target_memory_gb': target_memory_gb,
-            'optimizations_applied': []
+        # Generar features para este DataFrame
+        current_features = self.get_feature_columns(df)
+        
+        # Comparar con features de entrenamiento
+        missing_features = set(self.feature_columns_) - set(current_features)
+        extra_features = set(current_features) - set(self.feature_columns_)
+        
+        if missing_features:
+            logger.error(f"Features faltantes en {context}: {list(missing_features)}")
+            
+            # Intentar generar features faltantes con valores por defecto
+            for feature in missing_features:
+                if feature not in df.columns:
+                    logger.warning(f"Creando feature faltante '{feature}' con valor por defecto")
+                    df[feature] = 0.5  # Valor neutro para features de win rate
+        
+        if extra_features:
+            logger.debug(f"Features adicionales en {context}: {list(extra_features)}")
+        
+        # Verificar que las features críticas estén presentes
+        critical_features = ['home_win_rate_10g', 'away_win_rate_10g']
+        missing_critical = [f for f in critical_features if f not in current_features and f in self.feature_columns_]
+        
+        if missing_critical:
+            logger.error(f"Features críticas faltantes en {context}: {missing_critical}")
+            return False
+        
+        return len(missing_features) == 0
+    
+    def setup_confidence_thresholds(self, test_data: pd.DataFrame, 
+                                   strategies: List[str] = None) -> Dict[str, Any]:
+        """
+        Configurar umbrales de confianza basados en datos de prueba
+        
+        Args:
+            test_data: Datos de prueba para optimizar umbrales
+            strategies: Lista de estrategias a configurar
+            
+        Returns:
+            Resultados de configuración de umbrales
+        """
+        if not self.is_trained:
+            raise ValueError("El modelo debe estar entrenado antes de configurar umbrales")
+        
+        logger.info("🎯 Configurando umbrales de confianza para decisiones...")
+        
+        # Inicializar optimizador de umbrales
+        self.threshold_optimizer = NBAConfidenceThresholdOptimizer()
+        
+        # Obtener predicciones
+        y_true = test_data['is_win']
+        y_proba = self.predict_proba(test_data)[:, 1]
+        
+        # Analizar rendimiento por confianza
+        confidence_analysis = self.threshold_optimizer.analyze_confidence_performance(
+            y_true.values, y_proba
+        )
+        
+        # Configurar estrategias
+        if strategies is None:
+            strategies = ["balanced", "conservative", "aggressive", "high_confidence"]
+        
+        threshold_results = {}
+        for strategy in strategies:
+            logger.info(f"🔧 Configurando estrategia: {strategy}")
+            
+            # Optimizar umbrales
+            thresholds = self.threshold_optimizer.optimize_decision_thresholds(
+                y_true.values, y_proba, strategy
+            )
+            
+            # Crear reglas de decisión
+            rules = self.threshold_optimizer.create_decision_rules(strategy)
+            
+            # Evaluar rendimiento
+            evaluation = self.threshold_optimizer.evaluate_threshold_performance(
+                y_true.values, y_proba, strategy
+            )
+            
+            threshold_results[strategy] = {
+                'thresholds': thresholds,
+                'rules': rules,
+                'evaluation': evaluation
+            }
+        
+        # Comparar estrategias
+        strategy_comparison = self.threshold_optimizer.get_strategy_comparison(
+            y_true.values, y_proba
+        )
+        
+        # Guardar resultados
+        self.threshold_results = {
+            'confidence_analysis': confidence_analysis,
+            'strategy_results': threshold_results,
+            'strategy_comparison': strategy_comparison,
+            'test_samples': len(test_data),
+            'configured_at': datetime.now().isoformat()
         }
         
-        # Optimizar red neuronal
-        if 'neural_network' in self.models:
-            nn_model = self.models['neural_network']
-            
-            # Ajustar batch_size basado en memoria disponible
-            if target_memory_gb >= 6.0:
-                nn_model.batch_size = 128
-                nn_model.hidden_size = 256
-                optimization_info['optimizations_applied'].append('High memory: batch_size=128, hidden_size=256')
-            elif target_memory_gb >= 4.0:
-                nn_model.batch_size = 64
-                nn_model.hidden_size = 128
-                optimization_info['optimizations_applied'].append('Medium memory: batch_size=64, hidden_size=128')
-            else:
-                nn_model.batch_size = 32
-                nn_model.hidden_size = 64
-                optimization_info['optimizations_applied'].append('Low memory: batch_size=32, hidden_size=64')
-            
-            # Habilitar auto ajuste de batch_size
-            nn_model.auto_batch_size = True
-            optimization_info['optimizations_applied'].append('Auto batch_size enabled')
+        logger.info("✅ Umbrales de confianza configurados exitosamente")
         
-        logger.info(f"Modelo optimizado para {target_memory_gb:.1f}GB de memoria GPU")
-        return optimization_info
+        return self.threshold_results
+    
+    def predict_with_confidence(self, df: pd.DataFrame, 
+                              strategy: str = "balanced") -> List[Dict[str, Any]]:
+        """
+        Realizar predicciones con análisis de confianza y recomendaciones
+        
+        Args:
+            df: DataFrame con datos para predicción
+            strategy: Estrategia de umbrales a usar
+            
+        Returns:
+            Lista de predicciones con análisis de confianza
+        """
+        if not hasattr(self, 'threshold_optimizer'):
+            raise ValueError("Umbrales no configurados. Ejecuta setup_confidence_thresholds() primero.")
+        
+        logger.info(f"🔮 Realizando predicciones con análisis de confianza ({strategy})...")
+        
+        # Obtener predicciones básicas
+        y_proba = self.predict_proba(df)[:, 1]
+        
+        # Generar decisiones con confianza
+        decisions = self.threshold_optimizer.batch_decisions(y_proba, strategy)
+        
+        # Enriquecer con información del juego
+        enriched_predictions = []
+        for i, decision in enumerate(decisions):
+            game_info = {
+                'game_index': i,
+                'team': df.iloc[i].get('Team', 'Unknown'),
+                'opponent': df.iloc[i].get('Opp', 'Unknown'),
+                'date': df.iloc[i].get('Date', 'Unknown'),
+                'is_home': df.iloc[i].get('is_home', None)
+            }
+            
+            # Combinar información del juego con decisión
+            enriched_prediction = {**game_info, **decision}
+            enriched_predictions.append(enriched_prediction)
+        
+        logger.info(f"✅ {len(enriched_predictions)} predicciones generadas con análisis de confianza")
+        
+        return enriched_predictions
+    
+    def get_confidence_summary(self, predictions: List[Dict[str, Any]] = None,
+                             strategy: str = "balanced") -> Dict[str, Any]:
+        """
+        Obtener resumen de confianza de las predicciones
+        
+        Args:
+            predictions: Lista de predicciones (opcional)
+            strategy: Estrategia usada
+            
+        Returns:
+            Resumen de confianza
+        """
+        if predictions is None and not hasattr(self, 'threshold_results'):
+            raise ValueError("No hay predicciones o umbrales configurados")
+        
+        if predictions is None:
+            # Usar resultados de configuración
+            summary = {
+                'threshold_configuration': self.threshold_results,
+                'best_strategies': self.threshold_results['strategy_comparison']['best_by_metric']
+            }
+        else:
+            # Analizar predicciones proporcionadas
+            confidence_counts = {}
+            win_predictions = 0
+            high_confidence_predictions = 0
+            
+            for pred in predictions:
+                level = pred['confidence_level']
+                confidence_counts[level] = confidence_counts.get(level, 0) + 1
+                
+                if pred['predicted_win']:
+                    win_predictions += 1
+                
+                if level in ['high_confidence', 'very_high_confidence']:
+                    high_confidence_predictions += 1
+            
+            summary = {
+                'total_predictions': len(predictions),
+                'win_predictions': win_predictions,
+                'loss_predictions': len(predictions) - win_predictions,
+                'win_rate_predicted': win_predictions / len(predictions),
+                'confidence_distribution': confidence_counts,
+                'high_confidence_rate': high_confidence_predictions / len(predictions),
+                'strategy_used': strategy,
+                'recommendations': self._generate_confidence_recommendations(confidence_counts, len(predictions))
+            }
+        
+        return summary
+    
+    def _generate_confidence_recommendations(self, confidence_counts: Dict[str, int], 
+                                           total: int) -> List[str]:
+        """Generar recomendaciones basadas en distribución de confianza"""
+        recommendations = []
+        
+        no_decision_pct = confidence_counts.get('no_decision', 0) / total * 100
+        high_confidence_pct = confidence_counts.get('high_confidence', 0) / total * 100
+        
+        if no_decision_pct > 30:
+            recommendations.append(
+                f"⚠️ {no_decision_pct:.1f}% de predicciones tienen confianza insuficiente. "
+                "Considera usar estrategia más agresiva o recopilar más datos."
+            )
+        
+        if high_confidence_pct > 20:
+            recommendations.append(
+                f"🎯 {high_confidence_pct:.1f}% de predicciones tienen alta confianza. "
+                "Estas son las más confiables para tomar decisiones."
+            )
+        
+        if high_confidence_pct < 5:
+            recommendations.append(
+                "📊 Pocas predicciones de alta confianza. "
+                "El modelo puede beneficiarse de más datos o features adicionales."
+            )
+        
+        return recommendations
+    
+    def predict_single_game(self, team: str, opponent: str, is_home: bool,
+                          strategy: str = "balanced") -> Dict[str, Any]:
+        """
+        Predecir resultado de un juego específico con análisis de confianza
+        
+        Args:
+            team: Equipo que juega
+            opponent: Equipo oponente
+            is_home: Si el equipo juega en casa
+            strategy: Estrategia de umbrales
+            
+        Returns:
+            Predicción detallada con confianza
+        """
+        if not hasattr(self, 'threshold_optimizer'):
+            raise ValueError("Umbrales no configurados. Ejecuta setup_confidence_thresholds() primero.")
+        
+        logger.info(f"🏀 Prediciendo: {team} vs {opponent} ({'Casa' if is_home else 'Visitante'})")
+        
+        # Crear DataFrame para predicción (necesitaríamos datos históricos reales)
+        # Por ahora, esto es un ejemplo de la estructura
+        game_data = pd.DataFrame({
+            'Team': [team],
+            'Opp': [opponent],
+            'is_home': [1 if is_home else 0],
+            'Date': [datetime.now()]
+        })
+        
+        # Nota: En implementación real, necesitaríamos cargar datos históricos
+        # y generar todas las features necesarias
+        
+        try:
+            # Obtener predicción con confianza
+            predictions = self.predict_with_confidence(game_data, strategy)
+            prediction = predictions[0]
+            
+            # Enriquecer con contexto del juego
+            prediction['game_context'] = {
+                'matchup': f"{team} vs {opponent}",
+                'venue': "Casa" if is_home else "Visitante",
+                'prediction_time': datetime.now().isoformat()
+            }
+            
+            logger.info(f"✅ Predicción: {prediction['recommendation']}")
+            
+            return prediction
+            
+        except Exception as e:
+            logger.error(f"Error en predicción: {e}")
+            return {
+                'error': str(e),
+                'team': team,
+                'opponent': opponent,
+                'is_home': is_home
+            }
+    
+    def export_threshold_configuration(self, filepath: str = None) -> str:
+        """
+        Exportar configuración de umbrales a archivo JSON
+        
+        Args:
+            filepath: Ruta del archivo (opcional)
+            
+        Returns:
+            Ruta del archivo guardado
+        """
+        if not hasattr(self, 'threshold_results'):
+            raise ValueError("No hay configuración de umbrales para exportar")
+        
+        if filepath is None:
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            filepath = f"json/nba_confidence_thresholds_{timestamp}.json"
+        
+        # Crear directorio si no existe
+        os.makedirs(os.path.dirname(filepath), exist_ok=True)
+        
+        # Convertir a JSON serializable
+        export_data = safe_json_serialize(self.threshold_results)
+        
+        # Guardar archivo
+        with open(filepath, 'w', encoding='utf-8') as f:
+            json.dump(export_data, f, indent=2, ensure_ascii=False)
+        
+        logger.info(f"📄 Configuración de umbrales exportada a: {filepath}")
+        
+        return filepath
+    
+    @property
+    def is_trained(self) -> bool:
+        """Verificar si el modelo está entrenado"""
+        return (self.stacking_model is not None and 
+                hasattr(self, 'training_results') and 
+                self.training_results)
+
+
+class NBAConfidenceThresholdOptimizer:
+    """
+    Optimizador de umbrales de confianza para decisiones de victorias NBA
+    Basado en análisis de rendimiento por rangos de confianza
+    """
+    
+    def __init__(self):
+        self.thresholds = {}
+        self.performance_by_confidence = {}
+        self.calibration_data = {}
+        self.decision_rules = {}
+        
+    def analyze_confidence_performance(self, y_true: np.ndarray, 
+                                     y_proba: np.ndarray) -> Dict[str, Any]:
+        """
+        Analizar rendimiento del modelo por rangos de confianza
+        
+        Args:
+            y_true: Etiquetas verdaderas
+            y_proba: Probabilidades predichas
+            
+        Returns:
+            Análisis detallado por rangos de confianza
+        """
+        logger.info("🎯 Analizando rendimiento por rangos de confianza...")
+        
+        # Definir rangos de confianza más granulares
+        confidence_ranges = [
+            (0.0, 0.3, "Muy Baja"),
+            (0.3, 0.4, "Baja"),
+            (0.4, 0.6, "Media"),
+            (0.6, 0.7, "Alta"),
+            (0.7, 0.8, "Muy Alta"),
+            (0.8, 1.0, "Extrema")
+        ]
+        
+        analysis = {}
+        
+        for low, high, label in confidence_ranges:
+            # Filtrar predicciones en este rango
+            mask = (y_proba >= low) & (y_proba < high)
+            
+            if mask.sum() > 0:
+                range_y_true = y_true[mask]
+                range_y_proba = y_proba[mask]
+                range_y_pred = (range_y_proba > 0.5).astype(int)
+                
+                # Calcular métricas para este rango
+                accuracy = accuracy_score(range_y_true, range_y_pred)
+                precision = precision_score(range_y_true, range_y_pred, zero_division=0)
+                recall = recall_score(range_y_true, range_y_pred, zero_division=0)
+                
+                # Calcular calibración (qué tan bien alineadas están las probabilidades)
+                avg_predicted_prob = range_y_proba.mean()
+                actual_win_rate = range_y_true.mean()
+                calibration_error = abs(avg_predicted_prob - actual_win_rate)
+                
+                analysis[f"{low:.1f}-{high:.1f}"] = {
+                    'label': label,
+                    'range': (low, high),
+                    'samples': int(mask.sum()),
+                    'percentage': float(mask.sum() / len(y_true) * 100),
+                    'accuracy': float(accuracy),
+                    'precision': float(precision),
+                    'recall': float(recall),
+                    'avg_predicted_prob': float(avg_predicted_prob),
+                    'actual_win_rate': float(actual_win_rate),
+                    'calibration_error': float(calibration_error),
+                    'confidence_level': label
+                }
+                
+                logger.info(f"📊 {label} ({low:.1f}-{high:.1f}): "
+                           f"ACC={accuracy:.3f}, Muestras={mask.sum()}, "
+                           f"Calibración={calibration_error:.3f}")
+        
+        self.performance_by_confidence = analysis
+        return analysis
+    
+    def optimize_decision_thresholds(self, y_true: np.ndarray, 
+                                   y_proba: np.ndarray,
+                                   strategy: str = "balanced") -> Dict[str, float]:
+        """
+        Optimizar umbrales de decisión basados en estrategia
+        
+        Args:
+            y_true: Etiquetas verdaderas
+            y_proba: Probabilidades predichas
+            strategy: Estrategia de optimización
+                     - "balanced": Balance entre precision y recall
+                     - "conservative": Minimizar falsos positivos
+                     - "aggressive": Maximizar detección de victorias
+                     - "high_confidence": Solo decisiones de alta confianza
+                     
+        Returns:
+            Umbrales optimizados por estrategia
+        """
+        logger.info(f"🔧 Optimizando umbrales para estrategia: {strategy}")
+        
+        from sklearn.metrics import precision_recall_curve, roc_curve
+        
+        # Calcular curvas para optimización
+        precision, recall, pr_thresholds = precision_recall_curve(y_true, y_proba)
+        fpr, tpr, roc_thresholds = roc_curve(y_true, y_proba)
+        
+        thresholds = {}
+        
+        if strategy == "balanced":
+            # Maximizar F1-Score
+            f1_scores = 2 * (precision * recall) / (precision + recall + 1e-8)
+            best_idx = np.argmax(f1_scores[:-1])  # Excluir último elemento
+            thresholds['decision'] = float(pr_thresholds[best_idx])
+            thresholds['min_confidence'] = 0.3
+            thresholds['high_confidence'] = 0.7
+            
+        elif strategy == "conservative":
+            # Minimizar falsos positivos (alta precision)
+            target_precision = 0.8
+            valid_indices = precision >= target_precision
+            if valid_indices.any():
+                best_idx = np.where(valid_indices)[0][-1]  # Último índice válido
+                thresholds['decision'] = float(pr_thresholds[min(best_idx, len(pr_thresholds)-1)])
+            else:
+                thresholds['decision'] = 0.7  # Fallback conservativo
+            thresholds['min_confidence'] = 0.6
+            thresholds['high_confidence'] = 0.8
+            
+        elif strategy == "aggressive":
+            # Maximizar detección de victorias (alta recall)
+            target_recall = 0.8
+            valid_indices = recall >= target_recall
+            if valid_indices.any():
+                best_idx = np.where(valid_indices)[0][0]  # Primer índice válido
+                thresholds['decision'] = float(pr_thresholds[best_idx])
+            else:
+                thresholds['decision'] = 0.3  # Fallback agresivo
+            thresholds['min_confidence'] = 0.2
+            thresholds['high_confidence'] = 0.6
+            
+        elif strategy == "high_confidence":
+            # Solo decisiones de muy alta confianza
+            thresholds['decision'] = 0.5  # Umbral estándar
+            thresholds['min_confidence'] = 0.7  # Solo alta confianza
+            thresholds['high_confidence'] = 0.85  # Muy alta confianza
+            
+        # Umbrales adicionales para diferentes niveles de decisión
+        thresholds['very_low_confidence'] = 0.1
+        thresholds['low_confidence'] = 0.3
+        thresholds['medium_confidence'] = 0.6
+        thresholds['very_high_confidence'] = 0.9
+        
+        self.thresholds[strategy] = thresholds
+        
+        logger.info(f"✅ Umbrales optimizados para {strategy}:")
+        for key, value in thresholds.items():
+            logger.info(f"  • {key}: {value:.3f}")
+        
+        return thresholds
+    
+    def create_decision_rules(self, strategy: str = "balanced") -> Dict[str, Any]:
+        """
+        Crear reglas de decisión basadas en umbrales optimizados
+        
+        Args:
+            strategy: Estrategia de umbrales a usar
+            
+        Returns:
+            Reglas de decisión estructuradas
+        """
+        if strategy not in self.thresholds:
+            raise ValueError(f"Estrategia {strategy} no encontrada. "
+                           f"Ejecuta optimize_decision_thresholds() primero.")
+        
+        thresholds = self.thresholds[strategy]
+        
+        rules = {
+            'strategy': strategy,
+            'thresholds': thresholds,
+            'decision_levels': {
+                'no_decision': {
+                    'condition': f"confianza < {thresholds['min_confidence']:.3f}",
+                    'action': "ABSTENERSE - Confianza insuficiente",
+                    'confidence_range': (0.0, thresholds['min_confidence']),
+                    'recommendation': "No hacer predicción"
+                },
+                'low_confidence': {
+                    'condition': f"{thresholds['min_confidence']:.3f} <= confianza < {thresholds.get('medium_confidence', 0.6):.3f}",
+                    'action': "PRECAUCIÓN - Baja confianza",
+                    'confidence_range': (thresholds['min_confidence'], thresholds.get('medium_confidence', 0.6)),
+                    'recommendation': "Considerar factores adicionales"
+                },
+                'medium_confidence': {
+                    'condition': f"{thresholds.get('medium_confidence', 0.6):.3f} <= confianza < {thresholds['high_confidence']:.3f}",
+                    'action': "DECIDIR - Confianza moderada",
+                    'confidence_range': (thresholds.get('medium_confidence', 0.6), thresholds['high_confidence']),
+                    'recommendation': "Predicción confiable"
+                },
+                'high_confidence': {
+                    'condition': f"confianza >= {thresholds['high_confidence']:.3f}",
+                    'action': "DECIDIR CON CONFIANZA - Alta certeza",
+                    'confidence_range': (thresholds['high_confidence'], 1.0),
+                    'recommendation': "Predicción muy confiable"
+                }
+            }
+        }
+        
+        self.decision_rules[strategy] = rules
+        
+        logger.info(f"📋 Reglas de decisión creadas para estrategia: {strategy}")
+        for level, rule in rules['decision_levels'].items():
+            logger.info(f"  • {level}: {rule['action']}")
+        
+        return rules
+    
+    def make_decision(self, probability: float, strategy: str = "balanced") -> Dict[str, Any]:
+        """
+        Tomar decisión basada en probabilidad y estrategia
+        
+        Args:
+            probability: Probabilidad de victoria predicha
+            strategy: Estrategia de umbrales a usar
+            
+        Returns:
+            Decisión estructurada con recomendaciones
+        """
+        if strategy not in self.decision_rules:
+            self.create_decision_rules(strategy)
+        
+        rules = self.decision_rules[strategy]
+        thresholds = rules['thresholds']
+        
+        # Determinar nivel de confianza
+        confidence_level = "no_decision"
+        if probability >= thresholds['high_confidence']:
+            confidence_level = "high_confidence"
+        elif probability >= thresholds.get('medium_confidence', 0.6):
+            confidence_level = "medium_confidence"
+        elif probability >= thresholds['min_confidence']:
+            confidence_level = "low_confidence"
+        
+        # Determinar predicción
+        predicted_win = probability > thresholds['decision']
+        
+        # Calcular confianza absoluta (distancia del 0.5)
+        absolute_confidence = abs(probability - 0.5) * 2
+        
+        decision = {
+            'probability': float(probability),
+            'predicted_win': bool(predicted_win),
+            'confidence_level': confidence_level,
+            'absolute_confidence': float(absolute_confidence),
+            'decision_rule': rules['decision_levels'][confidence_level],
+            'strategy_used': strategy,
+            'thresholds_used': thresholds,
+            'recommendation': self._get_detailed_recommendation(
+                probability, predicted_win, confidence_level, absolute_confidence
+            )
+        }
+        
+        return decision
+    
+    def _get_detailed_recommendation(self, probability: float, predicted_win: bool, 
+                                   confidence_level: str, absolute_confidence: float) -> str:
+        """Generar recomendación detallada basada en la decisión"""
+        
+        win_loss = "VICTORIA" if predicted_win else "DERROTA"
+        prob_pct = probability * 100
+        conf_pct = absolute_confidence * 100
+        
+        if confidence_level == "no_decision":
+            return f"🚫 NO DECIDIR - Probabilidad {prob_pct:.1f}% demasiado incierta"
+        
+        elif confidence_level == "low_confidence":
+            return f"⚠️ {win_loss} con {prob_pct:.1f}% - BAJA CONFIANZA ({conf_pct:.1f}%) - Considerar factores adicionales"
+        
+        elif confidence_level == "medium_confidence":
+            return f"✅ {win_loss} con {prob_pct:.1f}% - CONFIANZA MODERADA ({conf_pct:.1f}%) - Predicción confiable"
+        
+        elif confidence_level == "high_confidence":
+            return f"🎯 {win_loss} con {prob_pct:.1f}% - ALTA CONFIANZA ({conf_pct:.1f}%) - Predicción muy confiable"
+        
+        return f"{win_loss} con {prob_pct:.1f}% de probabilidad"
+    
+    def batch_decisions(self, probabilities: np.ndarray, 
+                       strategy: str = "balanced") -> List[Dict[str, Any]]:
+        """
+        Tomar decisiones en lote para múltiples predicciones
+        
+        Args:
+            probabilities: Array de probabilidades
+            strategy: Estrategia de umbrales
+            
+        Returns:
+            Lista de decisiones
+        """
+        logger.info(f"🔄 Procesando {len(probabilities)} decisiones con estrategia: {strategy}")
+        
+        decisions = []
+        for prob in probabilities:
+            decision = self.make_decision(float(prob), strategy)
+            decisions.append(decision)
+        
+        # Estadísticas del lote
+        confidence_counts = {}
+        for decision in decisions:
+            level = decision['confidence_level']
+            confidence_counts[level] = confidence_counts.get(level, 0) + 1
+        
+        logger.info("📊 Distribución de decisiones:")
+        for level, count in confidence_counts.items():
+            pct = count / len(decisions) * 100
+            logger.info(f"  • {level}: {count} ({pct:.1f}%)")
+        
+        return decisions
+    
+    def evaluate_threshold_performance(self, y_true: np.ndarray, 
+                                     y_proba: np.ndarray,
+                                     strategy: str = "balanced") -> Dict[str, Any]:
+        """
+        Evaluar rendimiento de los umbrales optimizados
+        
+        Args:
+            y_true: Etiquetas verdaderas
+            y_proba: Probabilidades predichas
+            strategy: Estrategia a evaluar
+            
+        Returns:
+            Métricas de evaluación
+        """
+        if strategy not in self.thresholds:
+            self.optimize_decision_thresholds(y_true, y_proba, strategy)
+        
+        thresholds = self.thresholds[strategy]
+        decisions = self.batch_decisions(y_proba, strategy)
+        
+        # Filtrar solo decisiones donde se hace predicción
+        decisive_mask = np.array([
+            d['confidence_level'] != 'no_decision' for d in decisions
+        ])
+        
+        if decisive_mask.sum() == 0:
+            return {'error': 'No hay decisiones suficientemente confiables'}
+        
+        # Evaluar solo decisiones tomadas
+        decisive_true = y_true[decisive_mask]
+        decisive_pred = np.array([
+            d['predicted_win'] for d in decisions if d['confidence_level'] != 'no_decision'
+        ])
+        decisive_proba = y_proba[decisive_mask]
+        
+        # Métricas de rendimiento
+        evaluation = {
+            'strategy': strategy,
+            'total_samples': len(y_true),
+            'decisive_samples': int(decisive_mask.sum()),
+            'decision_rate': float(decisive_mask.sum() / len(y_true)),
+            'accuracy': float(accuracy_score(decisive_true, decisive_pred)),
+            'precision': float(precision_score(decisive_true, decisive_pred, zero_division=0)),
+            'recall': float(recall_score(decisive_true, decisive_pred, zero_division=0)),
+            'f1_score': float(f1_score(decisive_true, decisive_pred, zero_division=0)),
+            'thresholds_used': thresholds,
+            'confidence_distribution': {}
+        }
+        
+        # Distribución por nivel de confianza
+        for decision in decisions:
+            level = decision['confidence_level']
+            if level not in evaluation['confidence_distribution']:
+                evaluation['confidence_distribution'][level] = 0
+            evaluation['confidence_distribution'][level] += 1
+        
+        logger.info(f"📈 Evaluación de umbrales ({strategy}):")
+        logger.info(f"  • Tasa de decisión: {evaluation['decision_rate']:.3f}")
+        logger.info(f"  • Accuracy: {evaluation['accuracy']:.3f}")
+        logger.info(f"  • Precision: {evaluation['precision']:.3f}")
+        logger.info(f"  • Recall: {evaluation['recall']:.3f}")
+        
+        return evaluation
+    
+    def get_strategy_comparison(self, y_true: np.ndarray, 
+                              y_proba: np.ndarray) -> Dict[str, Any]:
+        """
+        Comparar todas las estrategias de umbrales
+        
+        Args:
+            y_true: Etiquetas verdaderas
+            y_proba: Probabilidades predichas
+            
+        Returns:
+            Comparación de estrategias
+        """
+        logger.info("🔍 Comparando estrategias de umbrales...")
+        
+        strategies = ["balanced", "conservative", "aggressive", "high_confidence"]
+        comparison = {}
+        
+        for strategy in strategies:
+            try:
+                evaluation = self.evaluate_threshold_performance(y_true, y_proba, strategy)
+                comparison[strategy] = evaluation
+            except Exception as e:
+                logger.error(f"Error evaluando estrategia {strategy}: {e}")
+                comparison[strategy] = {'error': str(e)}
+        
+        # Encontrar mejor estrategia por métrica
+        best_strategies = {}
+        metrics = ['accuracy', 'precision', 'recall', 'f1_score', 'decision_rate']
+        
+        for metric in metrics:
+            best_score = 0
+            best_strategy = None
+            
+            for strategy, results in comparison.items():
+                if 'error' not in results and metric in results:
+                    if results[metric] > best_score:
+                        best_score = results[metric]
+                        best_strategy = strategy
+            
+            best_strategies[metric] = {
+                'strategy': best_strategy,
+                'score': best_score
+            }
+        
+        comparison['best_by_metric'] = best_strategies
+        
+        logger.info("🏆 Mejores estrategias por métrica:")
+        for metric, best in best_strategies.items():
+            if best['strategy']:
+                logger.info(f"  • {metric}: {best['strategy']} ({best['score']:.3f})")
+        
+        return comparison

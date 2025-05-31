@@ -10,4 +10,6 @@ trained_models
 catboost_info
 scripts/
 plots/
+logs/
+json/
 
