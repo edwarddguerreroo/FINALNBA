@@ -168,224 +168,85 @@ class DoubleDoubleFeatureEngineer:
         # COMPILAR FEATURES ESENCIALES ÚNICAMENTE (REDUCIR COMPLEJIDAD)
         essential_features = []
         
-        # PRIORIDAD 1: Features de double double especializadas (MÁXIMO 8)
-        dd_features = [col for col in specialized_features if any(keyword in col for keyword in [
-            'dd_rate_5g', 'weighted_dd_rate_5g', 'dd_momentum_5g', 'dd_streak',
-            'dd_form_trend', 'dd_consistency_10g', 'dd_potential_score'
-        ])]
-        essential_features.extend(dd_features[:8])  # LIMITAR a 8
-        
-        # PRIORIDAD 2: Features de consistencia (MUY IMPORTANTES según análisis)
-        consistency_features = [col for col in specialized_features if any(keyword in col for keyword in [
-            'usage_consistency_5g', 'mp_consistency_5g', 'trb_consistency_5g', 
-            'ast_consistency_5g', 'pts_consistency_5g', 'efficiency_consistency_5g',
-            'overall_consistency', 'minutes_stability'
-        ])]
-        essential_features.extend([f for f in consistency_features if f not in essential_features][:10])
-        
-        # PRIORIDAD 3: Features de rendimiento estadístico (MÁXIMO 8)
-        stats_features = [col for col in specialized_features if any(keyword in col for keyword in [
-            'pts_hist_avg_5g', 'trb_hist_avg_5g', 'ast_hist_avg_5g', 'mp_hist_avg_5g',
-            'trb_above_avg', 'pts_above_avg', 'versatility_index', 'total_impact_5g'
-        ])]
-        essential_features.extend([f for f in stats_features if f not in essential_features][:8])
-        
-        # PRIORIDAD 4: Features contextuales avanzadas (MÁXIMO 8)
-        context_features = [col for col in specialized_features if any(keyword in col for keyword in [
-            'starter_boost', 'is_center', 'is_guard', 'is_forward',
-            'high_minutes_player', 'starter_minutes', 'home_advantage',
-            'position_dd_likelihood', 'well_rounded_player', 'workload_factor'
-        ])]
-        essential_features.extend([f for f in context_features if f not in essential_features][:8])
-        
-        # PRIORIDAD 5: Features de momentum y tendencia (MÁXIMO 6)
-        momentum_features = [col for col in specialized_features if any(keyword in col for keyword in [
-            'combined_momentum', 'pts_momentum_6g', 'trb_momentum_6g', 'ast_momentum_6g',
-            'pts_trend_factor', 'trb_trend_factor', 'ast_trend_factor'
-        ])]
-        essential_features.extend([f for f in momentum_features if f not in essential_features][:6])
-        
-        # PRIORIDAD 6: Features de proximidad y oportunidad (MÁXIMO 5)
-        proximity_features = [col for col in specialized_features if any(keyword in col for keyword in [
-            'pts_dd_proximity', 'trb_dd_proximity', 'ast_dd_proximity',
-            'best_dd_combo_score', 'pts_trb_combined'
-        ])]
-        essential_features.extend([f for f in proximity_features if f not in essential_features][:5])
-        
-        # PRIORIDAD 7: Features temporales básicas (MÁXIMO 3)
-        temporal_features = [col for col in specialized_features if any(keyword in col for keyword in [
-            'is_weekend', 'is_back_to_back', 'energy_factor'
-        ])]
-        essential_features.extend([f for f in temporal_features if f not in essential_features][:3])
-        
-        # Agregar nuevas features que existen en el dataframe
-        remaining_new_features = [
-            'primary_scorer', 'primary_rebounder', 'primary_playmaker',
-            'team_scoring_importance', 'team_rebounding_importance', 'high_workload'
+        # PRIORIDAD 1: TOP 15 FEATURES IDENTIFICADAS POR IMPORTANCIA PROMEDIO
+        # Basado en el análisis comprehensivo previo
+        top_importance_features = [
+            'team_rebounding_importance',   # 33.05 - TOP 1
+            'overall_consistency',          # 19.53 - TOP 2  
+            'team_scoring_importance',      # 19.26 - TOP 3
+            'ast_trend_factor',            # 18.84 - TOP 4
+            'trb_dd_proximity',            # 17.55 - TOP 5
+            'ast_consistency_5g',          # 13.99 - TOP 6
+            'usage_consistency_5g',        # 13.54 - TOP 7
+            'pts_above_avg',              # 13.13 - TOP 8
+            'trb_above_avg',              # 12.01 - TOP 9
+            'weighted_dd_rate_5g',        # 11.72 - TOP 10
+            'starter_boost',              # 10.88 - TOP 11
+            'pts_trend_factor',           # 10.66 - TOP 12
+            'mp_hist_avg_5g',             # 9.44 - TOP 13
+            'total_impact_5g',            # 9.39 - TOP 14
+            'is_forward'                  # 8.84 - TOP 15
         ]
         
-        for feature in remaining_new_features:
-            if feature in df.columns and feature not in essential_features:
+        # AGREGAR FEATURES TOP DISPONIBLES
+        for feature in top_importance_features:
+            if feature in specialized_features:
                 essential_features.append(feature)
-                if len(essential_features) >= 50:  # Límite total aumentado para incluir más features predictivas
+        
+        # PRIORIDAD 2: Features de predicción directa de double double (MÁXIMO 8)
+        dd_prediction_features = [col for col in specialized_features if any(keyword in col for keyword in [
+            'dd_rate_5g', 'dd_momentum_5g', 'dd_potential_score', 'dd_form_trend',
+            'dd_proximity', 'pts_dd_proximity', 'trb_dd_proximity', 'ast_dd_proximity'
+        ])]
+        for feature in dd_prediction_features:
+            if feature not in essential_features:
+                essential_features.append(feature)
+                if len([f for f in essential_features if 'dd_' in f or '_dd_' in f]) >= 8:
                     break
         
-        logger.info(f"Features esenciales seleccionadas: {len(essential_features)}")
-        logger.info(f"Distribución: DD={len([f for f in essential_features if 'dd_' in f])}, "
-                   f"Stats={len([f for f in essential_features if 'hist_avg' in f])}, "
-                   f"Consistency={len([f for f in essential_features if 'consistency' in f])}")
+        # PRIORIDAD 3: Features de estabilidad y consistencia (MÁXIMO 8)
+        stability_features = [col for col in specialized_features if any(keyword in col for keyword in [
+            'consistency_5g', 'stability', 'hist_avg_5g', 'trend_factor'
+        ])]
+        for feature in stability_features:
+            if feature not in essential_features:
+                essential_features.append(feature)
+                if len([f for f in essential_features if any(k in f for k in ['consistency', 'stability', 'hist_avg'])]) >= 8:
+                    break
         
-        # Actualizar lista de features
-        self.feature_columns = essential_features
+        # PRIORIDAD 4: Features contextuales clave (MÁXIMO 6)
+        context_key_features = [col for col in specialized_features if any(keyword in col for keyword in [
+            'starter_boost', 'is_center', 'is_guard', 'is_forward', 'versatility_index'
+        ])]
+        for feature in context_key_features:
+            if feature not in essential_features:
+                essential_features.append(feature)
+                if len([f for f in essential_features if any(k in f for k in ['is_', 'starter_', 'versatility'])]) >= 6:
+                    break
         
-        # NUEVAS FEATURES CONTEXTUALES PARA MAYOR PRECISIÓN
+        # LIMITAR A 30 FEATURES MÁXIMO PARA EVITAR OVERFITTING
+        essential_features = essential_features[:30]
         
-        # 1. Features de posición específica
-        df['is_center'] = (df['Height_Inches'] >= 82).astype(int)  # 6'10" o más
-        df['is_guard'] = (df['Height_Inches'] <= 78).astype(int)   # 6'6" o menos
-        df['is_forward'] = ((df['Height_Inches'] > 78) & (df['Height_Inches'] < 82)).astype(int)
+        # VERIFICAR FEATURES CRÍTICAS ESTÁN PRESENTES
+        critical_features = ['starter_boost', 'pts_above_avg', 'weighted_dd_rate_5g', 'overall_consistency']
+        for critical in critical_features:
+            if critical in specialized_features and critical not in essential_features:
+                if len(essential_features) < 30:
+                    essential_features.append(critical)
+                else:
+                    # Reemplazar una feature menos importante
+                    essential_features[-1] = critical
         
-        # 2. Features de minutos esperados (proxy para importancia)
-        if 'mp_hist_avg_5g' in df.columns:
-            df['high_minutes_player'] = (df['mp_hist_avg_5g'] >= 25).astype(int)
-            df['starter_minutes'] = (df['mp_hist_avg_5g'] >= 20).astype(int)
-        else:
-            df['high_minutes_player'] = 0
-            df['starter_minutes'] = 0
+        # APLICAR REGULARIZACIÓN POR CORRELACIÓN
+        if len(essential_features) > 15:
+            essential_features = self._apply_correlation_regularization(df, essential_features)
         
-        # 3. Features de rendimiento reciente vs histórico
-        if 'PTS' in df.columns and 'pts_hist_avg_5g' in df.columns:
-            df['pts_above_avg'] = (df['PTS'] > df['pts_hist_avg_5g']).astype(int)
-        else:
-            df['pts_above_avg'] = 0
-            
-        if 'TRB' in df.columns and 'trb_hist_avg_5g' in df.columns:
-            df['trb_above_avg'] = (df['TRB'] > df['trb_hist_avg_5g']).astype(int)
-        else:
-            df['trb_above_avg'] = 0
+        # LOGGING OPTIMIZADO FINAL
+        logger.info(f"✅ FEATURES ESPECIALIZADAS OPTIMIZADAS: {len(essential_features)} seleccionadas")
+        logger.info(f"🎯 Top 10 features: {essential_features[:10]}")
         
-        # 4. Features de combinación de stats
-        if all(col in df.columns for col in ['pts_hist_avg_5g', 'trb_hist_avg_5g', 'ast_hist_avg_5g']):
-            df['pts_trb_combined'] = df['pts_hist_avg_5g'] + df['trb_hist_avg_5g']
-            df['pts_ast_combined'] = df['pts_hist_avg_5g'] + df['ast_hist_avg_5g']
-            df['trb_ast_combined'] = df['trb_hist_avg_5g'] + df['ast_hist_avg_5g']
-        else:
-            df['pts_trb_combined'] = 0.0
-            df['pts_ast_combined'] = 0.0
-            df['trb_ast_combined'] = 0.0
-        
-        # 5. Feature de probabilidad de DD basada en posición
-        if 'Height_Inches' in df.columns:
-            df['position_dd_likelihood'] = 0.0
-            df.loc[df['is_center'] == 1, 'position_dd_likelihood'] = 0.15  # Centros más probable
-            df.loc[df['is_forward'] == 1, 'position_dd_likelihood'] = 0.10  # Forwards moderado
-            df.loc[df['is_guard'] == 1, 'position_dd_likelihood'] = 0.05   # Guards menos probable
-        else:
-            df['position_dd_likelihood'] = 0.05  # Valor neutral
-        
-        # 6. Features de consistencia mejoradas
-        if all(col in df.columns for col in ['pts_consistency_5g', 'trb_consistency_5g', 'ast_consistency_5g']):
-            df['overall_consistency'] = (
-                df['pts_consistency_5g'] + 
-                df['trb_consistency_5g'] + 
-                df['ast_consistency_5g']
-            ) / 3
-        else:
-            df['overall_consistency'] = 0.5  # Valor neutral
-        
-        # 7. Feature de momentum combinado
-        if all(col in df.columns for col in ['dd_momentum_5g', 'weighted_dd_rate_5g']):
-            df['combined_momentum'] = (
-                df['dd_momentum_5g'] * df['weighted_dd_rate_5g']
-            )
-        else:
-            df['combined_momentum'] = 0.0
-        
-        # 8. NUEVAS FEATURES CONTEXTUALES AVANZADAS
-        
-        # Features de rol del jugador basadas en stats
-        if all(col in df.columns for col in ['pts_hist_avg_5g', 'trb_hist_avg_5g', 'ast_hist_avg_5g']):
-            # Clasificación de rol principal
-            df['primary_scorer'] = (df['pts_hist_avg_5g'] >= 15).astype(int)
-            df['primary_rebounder'] = (df['trb_hist_avg_5g'] >= 8).astype(int)
-            df['primary_playmaker'] = (df['ast_hist_avg_5g'] >= 5).astype(int)
-            
-            # Jugador "completo" (bueno en múltiples áreas)
-            df['well_rounded_player'] = (
-                (df['pts_hist_avg_5g'] >= 10) & 
-                (df['trb_hist_avg_5g'] >= 5) & 
-                (df['ast_hist_avg_5g'] >= 3)
-            ).astype(int)
-        
-        # Features de contexto de equipo (si están disponibles)
-        if 'Team' in df.columns:
-            # Calcular promedio de equipo para contexto relativo
-            team_avg_pts = df.groupby(['Team', 'Date'])['PTS'].transform('mean') if 'PTS' in df.columns else 0
-            team_avg_trb = df.groupby(['Team', 'Date'])['TRB'].transform('mean') if 'TRB' in df.columns else 0
-            
-            # Importancia relativa en el equipo
-            if 'PTS' in df.columns:
-                df['team_scoring_importance'] = df['pts_hist_avg_5g'] / (team_avg_pts + 0.1)
-            if 'TRB' in df.columns:
-                df['team_rebounding_importance'] = df['trb_hist_avg_5g'] / (team_avg_trb + 0.1)
-        
-        # Features de fatiga y carga de trabajo
-        if 'MP' in df.columns:
-            # Carga de trabajo reciente
-            recent_minutes = self._get_historical_series(df, 'MP', 3, 'mean')
-            season_avg_minutes = self._get_historical_series(df, 'MP', 20, 'mean')
-            # CORREGIR: Asegurar que los índices coincidan
-            recent_minutes_aligned = recent_minutes.reindex(df.index).fillna(20)
-            season_avg_minutes_aligned = season_avg_minutes.reindex(df.index).fillna(20)
-            df['workload_factor'] = recent_minutes_aligned / (season_avg_minutes_aligned + 0.1)
-            
-            # Indicador de alta carga de trabajo
-            if 'mp_hist_avg_5g' in df.columns:
-                df['high_workload'] = (df['mp_hist_avg_5g'] >= 30).astype(int)
-            else:
-                df['high_workload'] = 0
-        else:
-            df['workload_factor'] = 1.0
-            df['high_workload'] = 0
-        
-        # Features de oportunidad de double-double
-        if all(col in df.columns for col in ['pts_hist_avg_5g', 'trb_hist_avg_5g', 'ast_hist_avg_5g']):
-            # Proximidad a double-double en cada categoría
-            df['pts_dd_proximity'] = np.minimum(df['pts_hist_avg_5g'] / 10.0, 1.0)
-            df['trb_dd_proximity'] = np.minimum(df['trb_hist_avg_5g'] / 10.0, 1.0)
-            df['ast_dd_proximity'] = np.minimum(df['ast_hist_avg_5g'] / 10.0, 1.0)
-            
-            # Mejor combinación para DD
-            df['best_dd_combo_score'] = np.maximum(
-                df['pts_dd_proximity'] + df['trb_dd_proximity'],
-                np.maximum(
-                    df['pts_dd_proximity'] + df['ast_dd_proximity'],
-                    df['trb_dd_proximity'] + df['ast_dd_proximity']
-                )
-            )
-        else:
-            df['pts_dd_proximity'] = 0.0
-            df['trb_dd_proximity'] = 0.0
-            df['ast_dd_proximity'] = 0.0
-            df['best_dd_combo_score'] = 0.0
-        
-        # Features de forma reciente
-        if 'double_double' in df.columns:
-            # Forma reciente en double-doubles (últimos 3 vs anteriores 7)
-            recent_dd_rate = df.groupby('Player')['double_double'].shift(1).rolling(window=3, min_periods=1).mean()
-            older_dd_rate = df.groupby('Player')['double_double'].shift(4).rolling(window=7, min_periods=1).mean()
-            # CORREGIR: Asegurar que los índices coincidan
-            recent_dd_rate_aligned = recent_dd_rate.reindex(df.index).fillna(0)
-            older_dd_rate_aligned = older_dd_rate.reindex(df.index).fillna(0)
-            df['dd_form_trend'] = recent_dd_rate_aligned - older_dd_rate_aligned
-            
-            # Consistencia en double-doubles
-            dd_std = df.groupby('Player')['double_double'].shift(1).rolling(window=10, min_periods=2).std()
-            dd_std_aligned = dd_std.reindex(df.index).fillna(1)
-            df['dd_consistency_10g'] = 1 / (dd_std_aligned + 1)
-        else:
-            df['dd_form_trend'] = 0.0
-            df['dd_consistency_10g'] = 0.5
+        # Actualizar cache de columnas
+        self.feature_columns = essential_features.copy()
         
         return essential_features
     
@@ -959,3 +820,36 @@ class DoubleDoubleFeatureEngineer:
         """Limpiar cache de cálculos para liberar memoria"""
         self._cached_calculations.clear()
         logger.debug("Cache de cálculos limpiado")
+
+    def _apply_correlation_regularization(self, df: pd.DataFrame, features: List[str]) -> List[str]:
+        """
+        Aplica regularización por correlación para reducir la redundancia entre features
+        
+        Args:
+            df: DataFrame con los datos
+            features: Lista de nombres de features a regularizar
+        
+        Returns:
+            Lista de features regularizadas
+        """
+        # Calcular matriz de correlación
+        corr_matrix = df[features].corr()
+        
+        # Identificar pares de features altamente correlacionadas
+        high_corr_pairs = []
+        for i in range(len(corr_matrix)):
+            for j in range(i+1, len(corr_matrix)):
+                if abs(corr_matrix.iloc[i, j]) > 0.8:  # Umbral arbitrario para alta correlación
+                    high_corr_pairs.append((corr_matrix.columns[i], corr_matrix.columns[j]))
+        
+        # Eliminar features redundantes
+        regularized_features = []
+        for feature in features:
+            if not any(feature in pair for pair in high_corr_pairs):
+                regularized_features.append(feature)
+        
+        # Verificar que no se exceda el límite de 30 features
+        if len(regularized_features) > 30:
+            regularized_features = regularized_features[:30]
+        
+        return regularized_features
